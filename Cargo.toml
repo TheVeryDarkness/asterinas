@@ -5,7 +5,7 @@ members = [
     "framework/libs/align_ext",
     "framework/libs/aster-main",
     "framework/libs/id-alloc",
-    "framework/libs/linux-bzimage/builder",
+    # "framework/libs/linux-bzimage/builder",
     "framework/libs/linux-bzimage/boot-params",
     "framework/libs/linux-bzimage/setup",
     "framework/libs/ktest",
@@ -30,6 +30,7 @@ members = [
     "kernel/libs/typeflags-util",
 ]
 exclude = [
+    "framework/libs/linux-bzimage/builder",
     "kernel/libs/comp-sys/cargo-component",
     "kernel/libs/comp-sys/component",
     "kernel/libs/comp-sys/component-macro",

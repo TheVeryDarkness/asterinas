@@ -240,7 +240,7 @@ dependencies = [
  "typeflags",
  "typeflags-util",
  "vte",
- "xmas-elf 0.8.0",
+ "xmas-elf",
 ]
 
 [[package]]
@@ -392,9 +392,6 @@ name = "bytemuck"
 version = "1.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2ef034f05691a48569bd920a96c81b9d91bbad1ab5ac7c4616c1f6ef36cb79f"
-dependencies = [
- "bytemuck_derive",
-]
 
 [[package]]
 name = "bytemuck_derive"
@@ -920,16 +917,6 @@ name = "linux-boot-params"
 version = "0.1.0"
 
 [[package]]
-name = "linux-bzimage-builder"
-version = "0.1.0"
-dependencies = [
- "bitflags 1.3.2",
- "bytemuck",
- "serde",
- "xmas-elf 0.9.1",
-]
-
-[[package]]
 name = "linux-bzimage-setup"
 version = "0.1.0"
 dependencies = [
@@ -941,7 +928,7 @@ dependencies = [
  "uefi",
  "uefi-services",
  "x86_64",
- "xmas-elf 0.8.0",
+ "xmas-elf",
 ]
 
 [[package]]
@@ -1687,15 +1674,6 @@ name = "xmas-elf"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d29b4d8e7beaceb4e77447ba941a7600d23d0319ab52da0461abea214832d5a"
-dependencies = [
- "zero",
-]
-
-[[package]]
-name = "xmas-elf"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42c49817e78342f7f30a181573d82ff55b88a35f86ccaf07fc64b3008f56d1c6"
 dependencies = [
  "zero",
 ]
