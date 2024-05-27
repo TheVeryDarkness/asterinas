@@ -23,8 +23,9 @@ pub fn ktest(_attr: TokenStream, item: TokenStream) -> TokenStream {
         "ktest function should return `()`"
     );
 
+    use rand::SeedableRng;
     // Generate a random identifier to avoid name conflicts.
-    let fn_id: String = rand::thread_rng()
+    let fn_id: String = rand::rngs::SmallRng::from_entropy()
         .sample_iter(&Alphanumeric)
         .take(8)
         .map(char::from)
