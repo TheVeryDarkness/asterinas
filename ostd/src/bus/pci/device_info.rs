@@ -82,7 +82,7 @@ impl PciDeviceLocation {
 
     /// Returns an iterator that enumerates all possible PCI device locations.
     pub fn all() -> impl Iterator<Item = PciDeviceLocation> {
-        iter::from_coroutine(
+        iter::from_generator(
         // #[coroutine]
             || {
                 for bus in Self::MIN_BUS..=Self::MAX_BUS {

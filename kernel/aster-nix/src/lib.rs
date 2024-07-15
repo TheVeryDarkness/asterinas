@@ -15,12 +15,14 @@
 #![feature(let_chains)]
 #![feature(linked_list_remove)]
 #![feature(register_tool)]
+#![feature(return_position_impl_trait_in_trait)]
 // FIXME: This feature is used to support vm capbility now as a work around.
 // Since this is an incomplete feature, use this feature is unsafe.
 // We should find a proper method to replace this feature with min_specialization, which is a sound feature.
 #![feature(specialization)]
 #![feature(step_trait)]
 #![feature(trait_alias)]
+#![feature(trait_upcasting)]
 #![register_tool(component_access_control)]
 
 use ostd::{
