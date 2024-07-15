@@ -2,6 +2,7 @@
 
 #![allow(unused_variables)]
 
+use core::mem::size_of;
 use rand::{rngs::StdRng, Error as RandError, RngCore};
 use spin::Once;
 

@@ -864,11 +864,12 @@ impl<'a, V: Interval<Vaddr> + 'a> IntervalSet<'a, Vaddr> for BTreeMap<Vaddr, V> 
             }
         }
         // Find all intersected elements following it.
-        while let Some((_, v)) = cursor.next() {
+        while let Some((_, v)) = cursor.key_value() {
             if v.range().start >= range.end {
                 break;
             }
             res.push(v);
+            cursor.move_next();
         }
 
         res

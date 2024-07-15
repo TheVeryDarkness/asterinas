@@ -80,9 +80,13 @@ pub fn component_generate() -> Vec<ComponentInfo> {
             // Parse the package ID <https://doc.rust-lang.org/cargo/reference/pkgid-spec.html>
             // and extract the path. Let's take `path+file:///path/to/comps/pci#aster-pci@0.1.0`
             // as an example package ID.
-            let id = package["id"].as_str().unwrap();
+            let mut id = package["id"].as_str().unwrap();
             // Remove the prefix `path+file://`.
-            assert!(id.starts_with("path+file://"));
+            if let Some(suffix) = id.strip_suffix(")") {
+                id = suffix;
+                id = id.split_once("(").unwrap().1;
+            }
+            assert!(id.starts_with("path+file://"), r#"{id:?} is not starts with "path+file://""#);
             let id = id.trim_start_matches("path+file://");
             // Remove the fragment part `#aster-pci@0.1.0`. Note that the package name part
             // may be missing if the directory name is the same as the package name.

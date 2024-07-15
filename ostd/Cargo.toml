@@ -34,7 +34,8 @@ spin = "0.9.4"
 static_assertions = "1.1.0"
 tdx-guest = { version = "0.1.0", optional = true }
 trapframe = { git = "https://github.com/asterinas/trapframe-rs", rev = "4739428" }
-unwinding = { version = "0.2.2", default-features = false, features = ["fde-gnu-eh-frame-hdr", "hide-trace", "panic", "personality", "unwinder"] }
+# unwinding = { version = "0.2.2", default-features = false, features = ["fde-gnu-eh-frame-hdr", "hide-trace", "panic", "personality", "unwinder"] }
+unwinding = { version = "=0.2.1", default-features = false, features = ["fde-gnu-eh-frame-hdr", "hide-trace", "panic", "personality", "unwinder"] }
 volatile = { version = "0.4.5", features = ["unstable"] }
 owo-colors = { version = "3", optional = true }
 

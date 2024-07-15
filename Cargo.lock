@@ -197,7 +197,7 @@ dependencies = [
  "typeflags",
  "typeflags-util",
  "vte",
- "xmas-elf 0.8.0",
+ "xmas-elf",
 ]
 
 [[package]]
@@ -348,9 +348,6 @@ name = "bytemuck"
 version = "1.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2ef034f05691a48569bd920a96c81b9d91bbad1ab5ac7c4616c1f6ef36cb79f"
-dependencies = [
- "bytemuck_derive",
-]
 
 [[package]]
 name = "bytemuck_derive"
@@ -653,12 +650,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
 
 [[package]]
-name = "gimli"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2e1d97fbe9722ba9bbd0c97051c2956e726562b61f86a25a4360398a40edfc9"
-
-[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,16 +862,6 @@ name = "linux-boot-params"
 version = "0.1.0"
 
 [[package]]
-name = "linux-bzimage-builder"
-version = "0.1.0"
-dependencies = [
- "bitflags 1.3.2",
- "bytemuck",
- "serde",
- "xmas-elf 0.9.1",
-]
-
-[[package]]
 name = "linux-bzimage-setup"
 version = "0.1.0"
 dependencies = [
@@ -892,7 +873,7 @@ dependencies = [
  "uefi",
  "uefi-services",
  "x86_64",
- "xmas-elf 0.8.0",
+ "xmas-elf",
 ]
 
 [[package]]
@@ -1088,7 +1069,7 @@ dependencies = [
  "bitvec",
  "buddy_system_allocator",
  "cfg-if",
- "gimli 0.28.0",
+ "gimli",
  "iced-x86",
  "id-alloc",
  "inherit-methods-macro",
@@ -1243,7 +1224,6 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
- "libc",
  "rand_chacha",
  "rand_core",
 ]
@@ -1645,11 +1625,11 @@ checksum = "301abaae475aa91687eb82514b328ab47a211a533026cb25fc3e519b86adfc3c"
 
 [[package]]
 name = "unwinding"
-version = "0.2.2"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc55842d0db6329a669d55a623c674b02d677b16bfb2d24857d4089d41eba882"
+checksum = "37a19a21a537f635c16c7576f22d0f2f7d63353c1337ad4ce0d8001c7952a25b"
 dependencies = [
- "gimli 0.30.0",
+ "gimli",
 ]
 
 [[package]]
@@ -1751,15 +1731,6 @@ name = "xmas-elf"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d29b4d8e7beaceb4e77447ba941a7600d23d0319ab52da0461abea214832d5a"
-dependencies = [
- "zero",
-]
-
-[[package]]
-name = "xmas-elf"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42c49817e78342f7f30a181573d82ff55b88a35f86ccaf07fc64b3008f56d1c6"
 dependencies = [
  "zero",
 ]

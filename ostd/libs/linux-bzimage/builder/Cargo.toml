@@ -8,6 +8,8 @@ repository = "https://github.com/asterinas/asterinas"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+
 [dependencies]
 bytemuck = { version = "1.14.0", features = ["derive"] }
 bitflags = "1.3"

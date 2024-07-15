@@ -14,7 +14,9 @@
 #![feature(negative_impls)]
 #![feature(new_uninit)]
 #![feature(panic_info_message)]
+#![feature(pointer_is_aligned)]
 #![feature(ptr_sub_ptr)]
+#![feature(stmt_expr_attributes)]
 #![feature(strict_provenance)]
 // The `generic_const_exprs` feature is incomplete however required for the page table
 // const generic implementation. We are using this feature in a conservative manner.

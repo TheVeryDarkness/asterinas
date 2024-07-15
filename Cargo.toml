@@ -3,9 +3,9 @@ resolver = "2"
 members = [
     "ostd",
     "ostd/libs/align_ext",
-    "ostd/libs/ostd-macros",
+    # "ostd/libs/ostd-macros",
     "ostd/libs/id-alloc",
-    "ostd/libs/linux-bzimage/builder",
+    # "ostd/libs/linux-bzimage/builder",
     "ostd/libs/linux-bzimage/boot-params",
     "ostd/libs/linux-bzimage/setup",
     "ostd/libs/ktest",
@@ -29,6 +29,9 @@ members = [
     "kernel/libs/typeflags-util",
 ]
 exclude = [
+    "ostd/libs/ostd-macros",
+    "ostd/libs/linux-bzimage/builder",
+    "kernel/libs/comp-sys/*",
     "kernel/libs/comp-sys/cargo-component",
     "kernel/libs/comp-sys/component",
     "kernel/libs/comp-sys/component-macro",
