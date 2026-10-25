@@ -107,7 +107,7 @@ impl RsmProgram {
             self.executable.call(
                 self.entry,
                 (&mut context as *mut ExecContext).cast::<c_void>(),
-                (event.as_ptr() as *const AbiScalar).cast::<c_void>(),
+                event.as_ptr().cast::<c_void>(),
                 (&mut output as *mut AbiScalar).cast::<c_void>(),
             )
         }

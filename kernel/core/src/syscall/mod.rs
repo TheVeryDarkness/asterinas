@@ -128,6 +128,7 @@ mod recvmsg;
 mod removexattr;
 mod rename;
 mod rmdir;
+mod rsm;
 mod rt_sigaction;
 mod rt_sigpending;
 mod rt_sigprocmask;
@@ -383,6 +384,7 @@ impl SyscallArgument {
 
 pub(crate) fn handle_syscall(ctx: &Context, user_ctx: &mut UserContext) {
     let syscall_frame = SyscallArgument::new_from_context(user_ctx);
+    rsm::observe(syscall_frame.syscall_number, &syscall_frame.args);
     let syscall_return = arch::syscall_dispatch(
         syscall_frame.syscall_number,
         syscall_frame.args,

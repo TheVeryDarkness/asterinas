@@ -110,6 +110,7 @@ use super::{
     removexattr::{sys_fremovexattr, sys_lremovexattr, sys_removexattr},
     rename::{sys_rename, sys_renameat, sys_renameat2},
     rmdir::sys_rmdir,
+    rsm::{sys_rsm_attach, sys_rsm_detach, sys_rsm_load, sys_rsm_read_stats},
     rt_sigaction::sys_rt_sigaction,
     rt_sigpending::sys_rt_sigpending,
     rt_sigprocmask::sys_rt_sigprocmask,
@@ -431,4 +432,8 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_EPOLL_PWAIT2 = 441     => sys_epoll_pwait2(args[..6]);
     SYS_FCHMODAT2 = 452        => sys_fchmodat2(args[..4]);
     SYS_LISTMOUNT = 458        => sys_listmount(args[..4]);
+    SYS_RSM_LOAD = 500         => sys_rsm_load(args[..2]);
+    SYS_RSM_ATTACH = 501       => sys_rsm_attach(args[..0]);
+    SYS_RSM_DETACH = 502       => sys_rsm_detach(args[..0]);
+    SYS_RSM_READ_STATS = 503   => sys_rsm_read_stats(args[..1]);
 }
