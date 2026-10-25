@@ -18,6 +18,7 @@ pub mod heap;
 pub mod io;
 pub(crate) mod kspace;
 pub(crate) mod mem_obj;
+pub mod native_program;
 pub(crate) mod page_prop;
 pub(crate) mod page_table;
 pub mod tlb;
@@ -42,6 +43,7 @@ pub use self::{
     },
     kspace::{KERNEL_VADDR_RANGE, MAX_USERSPACE_VADDR},
     mem_obj::{HasDaddr, HasPaddr, HasPaddrRange, HasSize, Split},
+    native_program::{ExecutableProgram, NativeProgram},
     page_prop::{CachePolicy, PageFlags, PageProperty},
     vm_space::VmSpace,
 };

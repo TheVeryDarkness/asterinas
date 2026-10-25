@@ -11,7 +11,7 @@ use crate::{
     mm::{
         HasSize, PAGE_SIZE, Paddr, Split, Vaddr,
         frame::{Frame, meta::AnyFrameMeta},
-        page_prop::PageProperty,
+        page_prop::{PageFlags, PageProperty},
         page_table::{largest_pages, max_page_level},
     },
 };
@@ -199,6 +199,37 @@ impl KVirtArea {
         }
 
         Self { range }
+    }
+
+    /// Changes the access flags of every page in the area.
+    ///
+    /// Only [`PageFlags`] are replaced; the privileged flags and cache policy
+    /// of each page are preserved.
+    ///
+    /// # Safety
+    ///
+    /// The caller must flush the TLB on every CPU that may have cached the
+    /// previous permissions before using the area. Otherwise a stale entry
+    /// keeps the old permissions: executing the newly read-execute code faults,
+    /// or a stale writable entry lets a CPU write memory that is supposed to be
+    /// immutable.
+    pub(crate) unsafe fn protect(&mut self, flags: PageFlags) {
+        let irq_guard = irq::disable_local();
+
+        let page_table = KERNEL_PAGE_TABLE.get().unwrap();
+        let range = self.start()..self.end();
+        let mut cursor = page_table.cursor_mut(&irq_guard, &range).unwrap();
+        loop {
+            let remaining = self.end() - cursor.virt_addr();
+            // SAFETY: Replacing only the access flags of pages that this area
+            // owns cannot affect kernel memory safety, and it leaves the
+            // reserved `AVAIL1` privileged flag untouched.
+            let Some(_) =
+                (unsafe { cursor.protect_next(remaining, &mut |prop| prop.flags = flags) })
+            else {
+                break;
+            };
+        }
     }
 }
 
