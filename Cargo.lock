@@ -149,6 +149,7 @@ dependencies = [
  "aster-nvme",
  "aster-rights",
  "aster-rights-proc",
+ "aster-rsm",
  "aster-softirq",
  "aster-systree",
  "aster-time",
@@ -369,6 +370,10 @@ dependencies = [
  "quote",
  "syn 2.0.118",
 ]
+
+[[package]]
+name = "aster-rsm"
+version = "0.1.0"
 
 [[package]]
 name = "aster-simpledrm"
