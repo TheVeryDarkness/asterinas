@@ -374,6 +374,9 @@ dependencies = [
 [[package]]
 name = "aster-rsm"
 version = "0.1.0"
+dependencies = [
+ "ostd",
+]
 
 [[package]]
 name = "aster-simpledrm"

@@ -10,6 +10,7 @@ use core::ffi::c_void;
 
 /// An exactly typed scalar argument or return slot, always eight bytes.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct AbiScalar {
     pub bits: u64,
 }

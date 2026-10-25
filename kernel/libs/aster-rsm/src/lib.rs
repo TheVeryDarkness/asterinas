@@ -12,10 +12,18 @@ extern crate alloc;
 
 pub mod abi;
 pub mod artifact;
+#[cfg(feature = "ostd")]
+pub mod program;
 pub mod reloc;
+#[cfg(feature = "ostd")]
+pub mod trampoline;
 
 pub use abi::{AbiScalar, ExecContext, NativeEntry, TrapRecord};
 pub use artifact::{
     Artifact, DecodeError, Entry, INTERFACE_VERSION, RelocKind, RelocTarget, Relocation,
 };
+#[cfg(feature = "ostd")]
+pub use program::{RsmError, RsmProgram};
 pub use reloc::{RelocateError, apply_relocations};
+#[cfg(feature = "ostd")]
+pub use trampoline::{HostInvocation, host_trampoline};
