@@ -92,11 +92,6 @@ impl RsmProgram {
                 detail: 0,
             },
             reserved: [0; 2],
-            references: 0,
-            reference_count: 0,
-            reference_capacity: 0,
-            reference_generation: 0,
-            padding: 0,
             host: &invocation as *const HostInvocation as usize,
         };
         let mut output = AbiScalar { bits: 0 };

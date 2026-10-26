@@ -27,16 +27,11 @@ pub struct TrapRecord {
 /// The invocation context passed as the first argument of every entry thunk.
 ///
 /// The layout must match `rsm-jit`'s non-test `ExecContext` byte for byte: the
-/// `host` field is read at offset 64 and the `trap` record written at offset 0.
+/// `trap` record is written at offset 0 and the `host` pointer read at offset 32.
 #[repr(C)]
 pub struct ExecContext {
     pub trap: TrapRecord,
     pub reserved: [u64; 2],
-    pub references: usize,
-    pub reference_count: u64,
-    pub reference_capacity: u64,
-    pub reference_generation: u32,
-    pub padding: u32,
     pub host: usize,
 }
 
@@ -50,6 +45,6 @@ pub type HostTrampoline =
 
 const _: () = {
     assert!(core::mem::offset_of!(ExecContext, trap) == 0);
-    assert!(core::mem::offset_of!(ExecContext, host) == 64);
-    assert!(size_of::<ExecContext>() == 72);
+    assert!(core::mem::offset_of!(ExecContext, host) == 32);
+    assert!(size_of::<ExecContext>() == 40);
 };
