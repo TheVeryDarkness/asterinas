@@ -21,6 +21,7 @@ let
     "ipc"
     "memory"
     "process"
+    "rsm"
     "security"
     "time"
   ];

@@ -20,6 +20,7 @@ SUBDIRS := \
 	memory \
 	network \
 	process \
+	rsm \
 	scripts \
 	security \
 	time \
