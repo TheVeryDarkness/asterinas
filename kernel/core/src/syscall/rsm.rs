@@ -74,6 +74,9 @@ pub(super) fn sys_rsm_attach(_ctx: &Context) -> Result<SyscallReturn> {
 /// Detaches the currently attached program without waiting for in-flight calls.
 pub(super) fn sys_rsm_detach(_ctx: &Context) -> Result<SyscallReturn> {
     *ATTACHED.write() = None;
+    // Reclaim the per-attachment invocation count now that the plugin's
+    // lifecycle has ended, so the next attachment starts from zero.
+    INVOCATIONS.store(0, Ordering::Relaxed);
     Ok(SyscallReturn::Return(0))
 }
 
@@ -87,7 +90,7 @@ pub(super) fn sys_rsm_read_stats(user_buf_ptr: Vaddr, ctx: &Context) -> Result<S
 }
 
 /// Returns the current statistics.
-fn read_stats() -> RsmStats {
+pub(crate) fn read_stats() -> RsmStats {
     let counter = ATTACHED
         .read()
         .as_ref()
@@ -98,10 +101,10 @@ fn read_stats() -> RsmStats {
     }
 }
 
-/// Statistics reported by `READ_STATS`.
+/// Statistics reported by `READ_STATS` and `/proc/rsm_stats`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod)]
-struct RsmStats {
-    counter: u64,
-    invocations: u64,
+pub(crate) struct RsmStats {
+    pub(crate) counter: u64,
+    pub(crate) invocations: u64,
 }
