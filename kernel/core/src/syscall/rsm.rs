@@ -11,7 +11,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use aster_rsm::RsmProgram;
 
 use super::SyscallReturn;
-use crate::prelude::*;
+use crate::{
+    prelude::*,
+    process::{UserNamespace, credentials::capabilities::CapSet},
+    security::lsm::hooks as lsm_hooks,
+};
 
 /// Maximum accepted artifact size, guarding against oversized user buffers.
 const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
@@ -35,12 +39,51 @@ pub(crate) fn observe(nr: u64, args: &[u64; 6]) {
     }
 }
 
+/// Gates the RSM loader behind `CAP_SYS_MODULE`.
+///
+/// This is a stopgap, not the real trust boundary: a caller that holds the
+/// capability can still load arbitrary machine code. It only blocks
+/// unprivileged abuse until the RSM verifier runs in-kernel at load time.
+fn require_rsm_capability(ctx: &Context) -> Result<()> {
+    lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
+        UserNamespace::get_init_singleton().as_ref(),
+        ctx.posix_thread,
+        CapSet::SYS_MODULE,
+    ))
+}
+
+/// Commands multiplexed through the single `SYS_RSM` syscall.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, TryFromInt)]
+enum RsmCmd {
+    /// Loads a compiled program from a user buffer.
+    Load = 0,
+    /// Attaches the loaded program to the system-call entry.
+    Attach = 1,
+    /// Detaches the currently attached program.
+    Detach = 2,
+    /// Copies counter and invocation statistics to a user buffer.
+    ReadStats = 3,
+}
+
+/// Dispatches the multiplexed `SYS_RSM` command.
+///
+/// `arg1` and `arg2` are interpreted per command: `Load` reads an artifact of
+/// `arg2` bytes from the user buffer `arg1`, `ReadStats` writes to the user
+/// buffer `arg1`, and `Attach`/`Detach` ignore both.
+pub(super) fn sys_rsm(cmd: u32, arg1: Vaddr, arg2: usize, ctx: &Context) -> Result<SyscallReturn> {
+    match RsmCmd::try_from(cmd)? {
+        RsmCmd::Load => rsm_load(arg1, arg2, ctx),
+        RsmCmd::Attach => rsm_attach(ctx),
+        RsmCmd::Detach => rsm_detach(ctx),
+        RsmCmd::ReadStats => rsm_read_stats(arg1, ctx),
+    }
+}
+
 /// Loads an artifact from a user buffer and stores it as the loaded program.
-pub(super) fn sys_rsm_load(
-    user_buf_ptr: Vaddr,
-    user_buf_len: usize,
-    ctx: &Context,
-) -> Result<SyscallReturn> {
+fn rsm_load(user_buf_ptr: Vaddr, user_buf_len: usize, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+
     if user_buf_len > MAX_ARTIFACT_BYTES {
         return_errno_with_message!(Errno::EINVAL, "artifact is too large");
     }
@@ -59,7 +102,9 @@ pub(super) fn sys_rsm_load(
 }
 
 /// Attaches the loaded program to the system-call entry.
-pub(super) fn sys_rsm_attach(_ctx: &Context) -> Result<SyscallReturn> {
+fn rsm_attach(ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+
     let Some(program) = PROGRAM.read().as_ref().cloned() else {
         return_errno_with_message!(Errno::ENOENT, "no loaded program");
     };
@@ -72,7 +117,9 @@ pub(super) fn sys_rsm_attach(_ctx: &Context) -> Result<SyscallReturn> {
 }
 
 /// Detaches the currently attached program without waiting for in-flight calls.
-pub(super) fn sys_rsm_detach(_ctx: &Context) -> Result<SyscallReturn> {
+fn rsm_detach(ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+
     *ATTACHED.write() = None;
     // Reclaim the per-attachment invocation count now that the plugin's
     // lifecycle has ended, so the next attachment starts from zero.
@@ -81,7 +128,7 @@ pub(super) fn sys_rsm_detach(_ctx: &Context) -> Result<SyscallReturn> {
 }
 
 /// Copies the counter and invocation statistics to the user buffer.
-pub(super) fn sys_rsm_read_stats(user_buf_ptr: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
+fn rsm_read_stats(user_buf_ptr: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
     let stats = read_stats();
     let user_space = ctx.user_space();
     let mut writer = user_space.writer(user_buf_ptr, size_of::<RsmStats>())?;
