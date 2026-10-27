@@ -16,6 +16,7 @@ use self::{
     mounts::MountsSymOps,
     pid::{PidDirOps, TidDirOps},
     rsm::RsmStatsFileOps,
+    rsm_log::RsmLogFileOps,
     self_::SelfSymOps,
     sys::SysDirOps,
     thread_self::ThreadSelfSymOps,
@@ -49,6 +50,7 @@ mod meminfo;
 mod mounts;
 mod pid;
 mod rsm;
+mod rsm_log;
 mod self_;
 mod stat;
 mod sys;
@@ -164,6 +166,7 @@ impl RootDirOps {
         ("meminfo", InodeType::File, MemInfoFileOps::new_inode),
         ("mounts", InodeType::SymLink, MountsSymOps::new_inode),
         ("rsm_stats", InodeType::File, RsmStatsFileOps::new_inode),
+        ("rsm_log", InodeType::File, RsmLogFileOps::new_inode),
         ("self", InodeType::SymLink, SelfSymOps::new_inode),
         ("stat", InodeType::File, StatFileOps::new_inode),
         ("sys", InodeType::Dir, SysDirOps::new_inode),

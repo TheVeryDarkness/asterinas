@@ -13,6 +13,8 @@ extern crate alloc;
 pub mod abi;
 pub mod artifact;
 #[cfg(feature = "ostd")]
+pub mod log;
+#[cfg(feature = "ostd")]
 pub mod program;
 pub mod reloc;
 #[cfg(feature = "ostd")]
