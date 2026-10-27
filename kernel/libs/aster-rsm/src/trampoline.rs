@@ -28,7 +28,8 @@ pub struct HostInvocation {
 /// Index 0 is the counter helper: it atomically increments the program's
 /// counter and writes the new value to `output` as an unsigned 64-bit scalar.
 /// Index 2 is `rsm_printk(ptr: *const u8, len: usize) -> ()`: it appends the
-/// `len` bytes at `ptr` to the [`crate::log`] ring buffer.
+/// `len` bytes at `ptr` plus a trailing newline to the [`crate::log`] ring
+/// buffer, so each message stays on its own line.
 ///
 /// # Safety
 ///
@@ -101,6 +102,9 @@ pub unsafe extern "C" fn host_trampoline(
             //    the slice, so no aliasing rule is violated.
             let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
             append(bytes);
+            // Terminate each message so /proc/rsm_log stays line-oriented, like
+            // `bpf_trace_printk`'s trailing newline.
+            append(b"\n");
             HOST_OK
         }
         _ => HOST_UNKNOWN,
