@@ -86,6 +86,12 @@ impl LogRing {
         }
         count
     }
+
+    /// Resets the ring to empty.
+    fn clear(&mut self) {
+        self.head = 0;
+        self.len = 0;
+    }
 }
 
 /// The sole ring buffer, shared by the trampoline and `/proc/rsm_log`.
@@ -101,6 +107,11 @@ pub fn append(bytes: &[u8]) {
 /// Returns the number of bytes copied.
 pub fn snapshot(dest: &mut [u8]) -> usize {
     LOG.lock().copy_out(dest)
+}
+
+/// Resets the ring buffer to empty.
+pub fn clear() {
+    LOG.lock().clear();
 }
 
 #[cfg(ktest)]

@@ -2,7 +2,7 @@
 
 //! Exposes the RSM message log at `/proc/rsm_log`.
 
-use aster_rsm::log::{LOG_CAPACITY_BYTES, snapshot};
+use aster_rsm::log::{LOG_CAPACITY_BYTES, clear, snapshot};
 
 use crate::{
     fs::{
@@ -18,7 +18,7 @@ pub(super) struct RsmLogFileOps;
 
 impl RsmLogFileOps {
     pub(super) fn new_inode(parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        ProcFile::new(Self, parent, mkmod!(a+r))
+        ProcFile::new(Self, parent, mkmod!(a+r, u+w))
     }
 }
 
@@ -33,5 +33,12 @@ impl ProcFileOps for RsmLogFileOps {
         let mut reader = VmReader::from(&buffer[offset..len]);
         let written = writer.write_fallible(&mut reader)?;
         Ok(written)
+    }
+
+    fn write_at(&self, _offset: usize, _reader: &mut VmReader) -> Result<usize> {
+        // Any write clears the log (`echo '' > /proc/rsm_log`); the written
+        // content is ignored.
+        clear();
+        Ok(0)
     }
 }
