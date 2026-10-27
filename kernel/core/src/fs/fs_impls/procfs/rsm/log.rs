@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Exposes the RSM message log at `/proc/rsm_log`.
+//! Exposes the RSM message log at `/proc/rsm/log`.
 
 use aster_rsm::log::{LOG_CAPACITY_BYTES, clear, snapshot};
 
@@ -13,7 +13,7 @@ use crate::{
     prelude::*,
 };
 
-/// Represents the inode at `/proc/rsm_log`.
+/// Represents the inode at `/proc/rsm/log`.
 pub(super) struct RsmLogFileOps;
 
 impl RsmLogFileOps {
@@ -36,7 +36,7 @@ impl ProcFileOps for RsmLogFileOps {
     }
 
     fn write_at(&self, _offset: usize, _reader: &mut VmReader) -> Result<usize> {
-        // Any write clears the log (`echo '' > /proc/rsm_log`); the written
+        // Any write clears the log (`echo '' > /proc/rsm/log`); the written
         // content is ignored.
         clear();
         Ok(0)

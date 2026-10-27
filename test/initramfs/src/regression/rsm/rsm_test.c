@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Loads the observer RSM artifact, attaches it to the system-call entry, makes
-// several system calls, and checks that /proc/rsm_log records the observed
+// several system calls, and checks that /proc/rsm/log records the observed
 // syscall numbers through rsm_printk.
 #include <fcntl.h>
 #include <stdint.h>
@@ -149,16 +149,16 @@ int main(void)
 
     syscall(SYS_RSM, RSM_CMD_DETACH);
 
-    int fd = open("/proc/rsm_log", O_RDONLY);
+    int fd = open("/proc/rsm/log", O_RDONLY);
     if (fd < 0) {
-        perror("open /proc/rsm_log");
+        perror("open /proc/rsm/log");
         return 1;
     }
     char log[2048];
     ssize_t n = read(fd, log, sizeof(log) - 1);
     close(fd);
     if (n < 0) {
-        perror("read /proc/rsm_log");
+        perror("read /proc/rsm/log");
         return 1;
     }
     log[n] = '\0';

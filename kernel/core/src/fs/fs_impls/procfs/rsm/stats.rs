@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Exposes RSM subsystem statistics at `/proc/rsm_stats`.
+//! Exposes RSM subsystem statistics at `/proc/rsm/stats`.
 
 use aster_util::printer::VmPrinter;
 
@@ -14,7 +14,7 @@ use crate::{
     syscall::rsm::read_stats,
 };
 
-/// Represents the inode at `/proc/rsm_stats`.
+/// Represents the inode at `/proc/rsm/stats`.
 pub(super) struct RsmStatsFileOps;
 
 impl RsmStatsFileOps {
