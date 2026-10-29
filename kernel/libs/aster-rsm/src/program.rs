@@ -4,13 +4,13 @@
 
 use core::{ffi::c_void, sync::atomic::Ordering};
 
-use ostd::mm::{ExecutableProgram, NativeProgram, Vaddr};
+use ostd::mm::{ExecutableProgram, NativeProgram, Vaddr, host_trampoline};
 
 use crate::{
     abi::{AbiScalar, ExecContext, TrapRecord},
     artifact::{Artifact, DecodeError},
     reloc::{RelocateError, apply_relocations},
-    trampoline::{HostInvocation, host_trampoline},
+    trampoline::HostInvocation,
 };
 
 /// The conventional name of the syscall-observer entry.
@@ -81,9 +81,7 @@ impl RsmProgram {
             slot.bits = *arg;
         }
 
-        let invocation = HostInvocation {
-            counter: &self.counter,
-        };
+        let invocation = HostInvocation::new(&self.counter);
         let mut context = ExecContext {
             trap: TrapRecord {
                 kind: 0,

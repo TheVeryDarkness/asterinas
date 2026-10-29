@@ -11,6 +11,7 @@
     expect(unused_imports)
 )]
 
+pub mod callback;
 pub mod dma;
 pub mod fault;
 pub mod frame;
@@ -30,6 +31,7 @@ mod test;
 use core::fmt::Debug;
 
 pub use self::{
+    callback::{HostCallbackTable, host_trampoline},
     frame::{
         Frame,
         allocator::FrameAllocOptions,
