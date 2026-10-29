@@ -5,3 +5,4 @@
 set -e
 
 ./rsm_test
+./rsm_bench
