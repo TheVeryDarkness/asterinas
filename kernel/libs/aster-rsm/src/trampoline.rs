@@ -4,8 +4,10 @@
 //!
 //! The generic callback-out trampoline lives in `ostd::mm::callback`; this
 //! module supplies the RSM-specific dispatcher and the invocation state it
-//! reads. Helper `index 0` atomically increments the program's counter, and
-//! `index 2` (`rsm_printk`) appends a byte range to the [`crate::log`] ring.
+//! reads. Helper `index 0` atomically increments the program's counter,
+//! `index 1` (`get_kernel_time_ns`) returns the monotonic time since boot in
+//! nanoseconds, and `index 2` (`rsm_printk`) appends a byte range to the
+//! [`crate::log`] ring.
 //!
 //! # Trust boundary
 //!
@@ -47,6 +49,49 @@ impl HostInvocation {
     }
 }
 
+/// Returns the monotonic time since boot in nanoseconds.
+///
+/// Programs use this to time their own work without leaving the extension.
+/// On x86-64 the TSC is scaled by a ratio cached on first use, so a call costs
+/// a multiply and a shift instead of a 128-bit division. Other architectures
+/// fall back to jiffies, whose resolution is far coarser: timing code that
+/// needs sub-millisecond resolution is only meaningful on x86-64.
+fn monotonic_nanoseconds() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use core::sync::atomic::AtomicU64;
+
+        /// `(1e9 << 32) / tsc_frequency`, computed once.
+        static TSC_TO_NANOSECONDS: AtomicU64 = AtomicU64::new(0);
+
+        let cached = TSC_TO_NANOSECONDS.load(Ordering::Relaxed);
+        let scale = if cached == 0 {
+            let frequency = ostd::arch::tsc_freq();
+            if frequency == 0 {
+                return 0;
+            }
+            let computed = ((1_000_000_000u128 << 32) / u128::from(frequency)) as u64;
+            TSC_TO_NANOSECONDS.store(computed, Ordering::Relaxed);
+            computed
+        } else {
+            cached
+        };
+
+        // The product keeps 32 fractional bits of the TSC-to-nanosecond ratio,
+        // so the shift is the conversion. It cannot overflow for any TSC value
+        // a boot reaches within decades.
+        let nanoseconds = (u128::from(ostd::arch::read_tsc()) * u128::from(scale)) >> 32;
+        u64::try_from(nanoseconds).unwrap_or(u64::MAX)
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        ostd::timer::Jiffies::elapsed()
+            .as_u64()
+            .saturating_mul(1_000_000)
+    }
+}
+
 /// RSM's helper dispatcher.
 ///
 /// # Safety
@@ -75,6 +120,12 @@ unsafe extern "C" fn dispatch(
             // SAFETY: `output` is non-null and points to writable `AbiScalar`
             // storage per the helper contract.
             unsafe { (*(output as *mut AbiScalar)).bits = value };
+            HOST_OK
+        }
+        1 => {
+            // SAFETY: `output` is non-null and points to writable `AbiScalar`
+            // storage per the helper contract.
+            unsafe { (*(output as *mut AbiScalar)).bits = monotonic_nanoseconds() };
             HOST_OK
         }
         2 => {
