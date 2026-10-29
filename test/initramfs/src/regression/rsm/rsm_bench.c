@@ -151,11 +151,17 @@ int main(void)
         return 1;
     }
 
-    // Cost must grow with the fanout and attaching must not be free; otherwise
-    // the measurement is broken, which is different from good news.
-    if (cost[1] <= detached_median || cost[2] <= cost[1]) {
-        fprintf(stderr, "costs do not grow as expected: %.1f %.1f %.1f\n",
-                detached_median, cost[1], cost[2]);
+    // Cost must rise when the plugin is attached; otherwise the measurement is
+    // broken, which is different from good news.
+    //
+    // The fanout slope is reported but not asserted: this kernel runs under
+    // QEMU's TCG emulation, where one system call costs tens of microseconds
+    // and the difference between one and four helper calls (a few hundred
+    // nanoseconds) is inside the noise. A KVM or bare-metal run is needed
+    // before the slope means anything.
+    if (cost[1] <= detached_median) {
+        fprintf(stderr, "attaching the plugin did not cost anything: %.1f %.1f\n",
+                detached_median, cost[1]);
         return 1;
     }
     return 0;

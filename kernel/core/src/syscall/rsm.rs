@@ -137,11 +137,18 @@ fn rsm_read_stats(user_buf_ptr: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
 }
 
 /// Returns the current statistics.
+///
+/// The counter belongs to the loaded program, not to one attachment, so it
+/// stays readable after a detach — that is when a run's totals are usually
+/// inspected. The attached program is consulted first so the common case does
+/// not touch the second lock; both handles are cloned out before the lock guard
+/// is dropped.
 pub(crate) fn read_stats() -> RsmStats {
-    let counter = ATTACHED
-        .read()
-        .as_ref()
-        .map_or(0, |program| program.counter());
+    let attached = ATTACHED.read().as_ref().cloned();
+    let counter = match attached {
+        Some(program) => program.counter(),
+        None => PROGRAM.read().as_ref().map_or(0, |program| program.counter()),
+    };
     RsmStats {
         counter,
         invocations: INVOCATIONS.load(Ordering::Relaxed),
