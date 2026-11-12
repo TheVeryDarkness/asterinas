@@ -23,6 +23,7 @@ extern crate alloc;
 
 pub mod abi;
 pub mod artifact;
+pub mod hooks;
 #[cfg(feature = "ostd")]
 pub mod log;
 #[cfg(feature = "ostd")]

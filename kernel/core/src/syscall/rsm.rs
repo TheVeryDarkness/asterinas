@@ -8,7 +8,10 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use aster_rsm::RsmProgram;
+use aster_rsm::{
+    RsmProgram,
+    hooks::{self, HookError, Phase},
+};
 
 use super::SyscallReturn;
 use crate::{
@@ -64,6 +67,12 @@ enum RsmCmd {
     Detach = 2,
     /// Copies counter and invocation statistics to a user buffer.
     ReadStats = 3,
+    /// Attaches the loaded program to a generated function and phase.
+    AttachHook = 4,
+    /// Detaches a generated function's phase from future invocations.
+    DetachHook = 5,
+    /// Reads a generated function phase's cumulative statistics.
+    ReadHookStats = 6,
 }
 
 /// Dispatches the multiplexed `SYS_RSM` command.
@@ -77,7 +86,79 @@ pub(super) fn sys_rsm(cmd: u32, arg1: Vaddr, arg2: usize, ctx: &Context) -> Resu
         RsmCmd::Attach => rsm_attach(ctx),
         RsmCmd::Detach => rsm_detach(ctx),
         RsmCmd::ReadStats => rsm_read_stats(arg1, ctx),
+        RsmCmd::AttachHook => rsm_attach_hook(arg1 as u64, arg2 as u64, ctx),
+        RsmCmd::DetachHook => rsm_detach_hook(arg1 as u64, arg2 as u64, ctx),
+        RsmCmd::ReadHookStats => rsm_read_hook_stats(arg1, ctx),
     }
+}
+
+/// Attaches the loaded program to one generated hook phase.
+fn rsm_attach_hook(id: u64, phase: u64, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let phase = hook_phase(phase)?;
+    hooks::find(id).map_err(hook_error)?;
+    let program = PROGRAM
+        .read()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| Error::new(Errno::ENOENT))?;
+    hooks::attach(id, phase, program).map_err(hook_error)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+/// Stops admitting new function invocations to one hook phase.
+fn rsm_detach_hook(id: u64, phase: u64, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let phase = hook_phase(phase)?;
+    hooks::detach(id, phase).map_err(hook_error)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+/// Copies cumulative hook counters without exposing kernel addresses.
+fn rsm_read_hook_stats(address: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
+    let user_space = ctx.user_space();
+    let mut request = user_space
+        .reader(address, size_of::<RsmHookStats>())?
+        .read_val::<RsmHookStats>()?;
+    if request.reserved != 0 {
+        return_errno_with_message!(Errno::EINVAL, "reserved hook statistics field is nonzero");
+    }
+    let phase = hook_phase(u64::from(request.phase))?;
+    let stats = hooks::find(request.hook_id)
+        .map_err(hook_error)?
+        .stats(phase);
+    request.invocations = stats.invocations;
+    request.skipped = stats.skipped;
+    request.traps = stats.traps;
+    user_space
+        .writer(address, size_of::<RsmHookStats>())?
+        .write_val(&request)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn hook_phase(value: u64) -> Result<Phase> {
+    Phase::from_raw(value).ok_or_else(|| Error::new(Errno::EINVAL))
+}
+
+fn hook_error(error: HookError) -> Error {
+    Error::new(match error {
+        HookError::NotFound | HookError::NotAttached => Errno::ENOENT,
+        HookError::AlreadyAttached => Errno::EBUSY,
+        HookError::Ambiguous => Errno::EINVAL,
+        HookError::GenerationExhausted => Errno::EOVERFLOW,
+    })
+}
+
+/// The input identity and output counters for `READ_HOOK_STATS`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod)]
+struct RsmHookStats {
+    hook_id: u64,
+    phase: u32,
+    reserved: u32,
+    invocations: u64,
+    skipped: u64,
+    traps: u64,
 }
 
 /// Loads an artifact from a user buffer and stores it as the loaded program.
@@ -147,7 +228,10 @@ pub(crate) fn read_stats() -> RsmStats {
     let attached = ATTACHED.read().as_ref().cloned();
     let counter = match attached {
         Some(program) => program.counter(),
-        None => PROGRAM.read().as_ref().map_or(0, |program| program.counter()),
+        None => PROGRAM
+            .read()
+            .as_ref()
+            .map_or(0, |program| program.counter()),
     };
     RsmStats {
         counter,

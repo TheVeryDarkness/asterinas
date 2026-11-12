@@ -83,6 +83,10 @@ cvm_guest = ["dep:tdx-guest", "ostd/cvm_guest", "aster-virtio/cvm_guest"]
 pvh_boot = ["ostd/pvh_boot"]
 # By default we use the Sv48 address translation mode.
 riscv_sv39_mode = ["ostd/riscv_sv39_mode"]
+rsm-hooks = ["dep:rsm-instrument"]
+
+[build-dependencies]
+rsm-instrument = { workspace = true, optional = true }
 
 [lints]
 workspace = true

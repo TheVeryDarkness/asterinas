@@ -2,7 +2,7 @@
 
 //! The RSM subsystem directory at `/proc/rsm`.
 
-use self::{log::RsmLogFileOps, stats::RsmStatsFileOps};
+use self::{hooks::RsmHooksFileOps, log::RsmLogFileOps, stats::RsmStatsFileOps};
 use super::{
     StaticEntry,
     template::{
@@ -18,6 +18,7 @@ use crate::{
     prelude::*,
 };
 
+mod hooks;
 mod log;
 mod stats;
 
@@ -30,6 +31,7 @@ impl RsmDirOps {
     }
 
     const STATIC_ENTRIES: &'static [StaticEntry] = &[
+        ("hooks", InodeType::File, RsmHooksFileOps::new_inode),
         ("log", InodeType::File, RsmLogFileOps::new_inode),
         ("stats", InodeType::File, RsmStatsFileOps::new_inode),
     ];

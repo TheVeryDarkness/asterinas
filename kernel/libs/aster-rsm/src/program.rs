@@ -26,6 +26,7 @@ const MAX_ENTRY_STACK_BYTES: usize = 128 * 1024;
 pub struct RsmProgram {
     executable: ExecutableProgram,
     entry: Vaddr,
+    native_stack_bytes: usize,
     counter: core::sync::atomic::AtomicU64,
 }
 
@@ -37,6 +38,7 @@ impl RsmProgram {
             .entry(OBSERVER_ENTRY)
             .ok_or(RsmError::MissingEntry)?;
         let code_offset = entry.code_offset;
+        let native_stack_bytes = entry.native_peak_bytes;
         if entry.native_peak_bytes > MAX_ENTRY_STACK_BYTES {
             return Err(RsmError::StackBound);
         }
@@ -60,6 +62,7 @@ impl RsmProgram {
         Ok(Self {
             executable,
             entry,
+            native_stack_bytes,
             counter: core::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -67,6 +70,11 @@ impl RsmProgram {
     /// Returns the current counter value.
     pub fn counter(&self) -> u64 {
         self.counter.load(Ordering::Relaxed)
+    }
+
+    /// Returns the entry's native stack bound from the trusted artifact.
+    pub fn native_stack_bytes(&self) -> usize {
+        self.native_stack_bytes
     }
 
     /// Invokes the observer entry with the given system-call event.
