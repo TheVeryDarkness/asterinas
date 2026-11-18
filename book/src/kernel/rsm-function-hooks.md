@@ -300,3 +300,61 @@ Use the hook's skipped counter alongside the sample count when interpreting resu
 Software-emulated QEMU results establish functionality, not paper-quality timing.
 For performance measurements, compare the same optimized build profile
 without instrumentation, with unattached hooks, and with attached observers.
+
+### Trace a workload
+
+These four observers adapt questions from Linux eBPF tools to the scalar values
+that Asterinas exposes on its own function hooks. Each report can be read from
+userspace after detach.
+
+| Observer | What it measures | Linux example |
+| --- | --- | --- |
+| `open-intent` | Which kinds of opens fail? Pairs `sys_openat` entry flags with the return outcome. Counts read-only, write or read/write, create-requested, and other opens (including `O_PATH`). | [BCC opensnoop](https://github.com/iovisor/bcc/blob/master/tools/opensnoop_example.txt) |
+| `bind-outcomes` | Are TCP or UDP binds failing? The same observer attaches to the two socket implementations. Each hook ID gets its own success and failure counts. Errors rejected before socket dispatch, such as a bad descriptor, fall outside these counts. | [BCC bindsnoop](https://github.com/iovisor/bcc/blob/master/tools/bindsnoop_example.txt) |
+| `page-faults` | Does a second pass over the same memory still fault? Counts successful and rejected returns from the process address-space fault handler. These counts include all observed calls to that handler and carry no PID or major/minor classification. | [bpftrace page-fault counter](https://bpftrace.org/one-liners) |
+| `futex-wait` | How long do successful plain `FUTEX_WAIT` calls take, including sleep and rescheduling? Matches entry and return by invocation ID, groups elapsed time into four buckets, and counts errors separately. | [BCC futexctn](https://github.com/iovisor/bcc/blob/master/libbpf-tools/futexctn.bpf.c) |
+
+Build each observer with the Rssembly revision above, then boot the test guest.
+
+```sh
+for name in open-intent bind-outcomes page-faults futex-wait; do
+    python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
+        "target/rsm-showcases/$name.rsm.bin" \
+        --source "tools/rsm-instrument/observers/$name.rs" || exit 1
+done
+python3 tools/rsm-instrument/run-kernel-tests.py --smp 2 \
+    --showcase-observers target/rsm-showcases
+```
+
+The guest creates and opens files, binds local sockets to free and occupied
+ports, writes twice to an anonymous mapping, and wakes a waiting thread.
+It prints the observed values and checks them before emitting `RSM_SHOWCASES_QEMU_PASS`.
+
+To observe your own command in a running Asterinas guest, install the artifacts and the
+`rsm-observe` userspace driver together. The QEMU runner installs them under
+`/test/rsm`. To build the driver separately for an x86-64 guest, run
+`x86_64-linux-gnu-gcc -O2 -static tools/rsm-instrument/rsm-observe.c -o rsm-observe`
+in the development container. For example, run this in a guest with `/bin/ls`:
+
+```sh
+cd /test/rsm
+./rsm-observe open-intent.rsm.bin \
+    --attach both aster_core::syscall::open::sys_openat \
+    --read 0 9 -- /bin/ls /proc
+```
+
+The first eight words are success/failure pairs in the order read, write,
+create, other. The ninth counts returns that could not be matched to an entry.
+The plugin retains 64 entry records. Overlapping calls that reuse a slot can
+lose a match. A create request includes opens of an existing file with `O_CREAT`.
+
+| Observer | `--attach` phase and qualified hook | `--read` selector and word count |
+| --- | --- | --- |
+| `bind-outcomes` | `return` on `aster_core::net::socket::ip::stream::<StreamSocket as Socket>::bind` and `aster_core::net::socket::ip::datagram::<DatagramSocket as Socket>::bind` | `'@<qualified hook name>' 2` for each transport, yielding successful and failed binds. Quote each complete hook name in the shell. |
+| `page-faults` | `return` on `aster_core::vm::vmar::vmar_impls::page_fault::Vmar::handle_page_fault` | `0 2` yields resolved and rejected faults. |
+| `futex-wait` | `both` on `aster_core::process::posix_thread::futex::futex_wait` | `0 6` yields waits under 100 µs, 100 µs to under 1 ms, 1 ms to under 10 ms, and 10 ms or more, followed by errors and unmatched successes. |
+
+The driver requires `CAP_SYS_MODULE` and exclusive use of the loaded-program slot.
+It attaches system-wide for the duration of the command, so other tasks can contribute.
+It detaches before reading the maps and propagates the command's exit status.
+Each word is read separately. A callback already in flight can still finish after detach.

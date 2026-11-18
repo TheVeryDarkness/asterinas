@@ -73,6 +73,10 @@ int main(void)
     if (!failed)
         failed = run("/test/rsm/plugin_memory_test", "allocator");
 #endif
+#ifdef RSM_TEST_SHOWCASES
+    if (!failed)
+        failed = run("/test/rsm/plugin_memory_test", "showcases");
+#endif
     puts(failed ? "FUNCTION_HOOKS_QEMU_FAIL" : "FUNCTION_HOOKS_QEMU_PASS");
     reboot(RB_POWER_OFF);
     for (;;)
@@ -81,7 +85,8 @@ int main(void)
 """
 
 
-def build_initramfs(root, output, compiler, observer, state_observers, allocator_observer):
+def build_initramfs(root, output, compiler, observer, state_observers, allocator_observer,
+                    showcase_observers=None):
     """Build the current tests and archive a minimal, self-contained rootfs."""
     tests = root / "test/initramfs/src/regression/rsm"
     image = output / "initramfs"
@@ -90,7 +95,7 @@ def build_initramfs(root, output, compiler, observer, state_observers, allocator
     for directory in ["proc", "dev", "tmp"]:
         (image / directory).mkdir(exist_ok=True)
     programs = ["function_hooks_test", "rsm_test"]
-    if state_observers or allocator_observer:
+    if state_observers or allocator_observer or showcase_observers:
         programs.append("plugin_memory_test")
     for name in programs:
         subprocess.run(
@@ -113,6 +118,17 @@ def build_initramfs(root, output, compiler, observer, state_observers, allocator
     if allocator_observer:
         artifacts["allocator.rsm.bin"] = allocator_observer
         init_flags.append("-DRSM_TEST_ALLOCATOR")
+    if showcase_observers:
+        for name in ["open-intent", "bind-outcomes", "page-faults", "futex-wait"]:
+            filename = f"{name}.rsm.bin"
+            artifacts[filename] = showcase_observers / filename
+        init_flags.append("-DRSM_TEST_SHOWCASES")
+        subprocess.run(
+            [compiler, "-O2", "-Wall", "-Wextra", "-Werror", "-static",
+             str(root / "tools/rsm-instrument/rsm-observe.c"), "-o", str(binaries / "rsm-observe")],
+            check=True,
+        )
+        programs.append("rsm-observe")
     for filename, source in artifacts.items():
         artifact = source.read_bytes()
         if not artifact.startswith(b"RSMPIC\0\0\x02\0\0\0"):
@@ -217,6 +233,8 @@ def main():
                         help="directory containing the compiled stateful example observers")
     parser.add_argument("--allocator-observer", type=Path,
                         help="compiled Rust allocator regression observer")
+    parser.add_argument("--showcase-observers", type=Path,
+                        help="directory of compiled open, bind, page-fault, and futex observers")
     args = parser.parse_args()
     if platform.system() != "Linux":
         parser.error("run inside the Asterinas Linux development container")
@@ -230,7 +248,7 @@ def main():
     output = root / "target/rsm-function-hooks" / f"{args.profile}-smp{args.smp}"
     output.mkdir(parents=True, exist_ok=True)
     archive = build_initramfs(root, output, args.cc, args.observer_artifact,
-                              args.state_observers, args.allocator_observer)
+                              args.state_observers, args.allocator_observer, args.showcase_observers)
     serial = output / "serial.log"
     serial.unlink(missing_ok=True)
     configuration = f'''# Temporary focused function-hook regression configuration.
@@ -276,11 +294,14 @@ log_file = "{serial}"
             return
         contents = serial.read_text(errors="replace") if serial.exists() else ""
         for line in contents.splitlines():
-            if "PASS:" in line or "FAIL" in line or "FUNCTION_HOOKS_" in line or "PLUGIN_" in line:
+            if ("PASS:" in line or "FAIL" in line or "FUNCTION_HOOKS_" in line or "PLUGIN_" in line
+                    or line.startswith(("open-intent", "bind-outcomes", "page-faults", "futex-wait",
+                                        "RSM_SHOWCASES_"))):
                 print(line)
         if ((args.observer_artifact and "FUNCTION_HOOKS_V2_OBSERVER_PASS" not in contents)
                 or (args.state_observers and "PLUGIN_STATE_QEMU_PASS" not in contents)
                 or (args.allocator_observer and "PLUGIN_ALLOCATOR_QEMU_PASS" not in contents)
+                or (args.showcase_observers and "RSM_SHOWCASES_QEMU_PASS" not in contents)
                 or "FUNCTION_HOOKS_TEST_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_FAIL" in contents):

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Loads separately compiled Rssembly observers and reads their reported state.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <errno.h>
 #include <inttypes.h>
 #include <pthread.h>
@@ -9,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 enum {
@@ -243,9 +247,76 @@ static void check_allocator(void)
 	puts("PLUGIN_ALLOCATOR_QEMU_PASS: 32 checked byte round trips, one allocation refused, subsequent callbacks succeeded");
 }
 
+#include "showcase_bind_outcomes.h"
+#include "showcase_futex_wait.h"
+#include "showcase_open_intent.h"
+#include "showcase_page_faults.h"
+
+static void check_showcase_driver(void)
+{
+	// Resolve one map by its hook name and request a second, unused map.
+	const char *udp =
+		"aster_core::net::socket::ip::datagram::<DatagramSocket as Socket>::bind";
+	char selector[128], report[160];
+	CHECK(snprintf(selector, sizeof(selector), "@%s", udp) <
+	      (int)sizeof(selector));
+	CHECK(snprintf(report, sizeof(report), "map %s: 2 3\n", selector) <
+	      (int)sizeof(report));
+	int output[2];
+	CHECK(pipe(output) == 0);
+	pid_t child = fork();
+	CHECK(child >= 0);
+	if (child == 0) {
+		close(output[0]);
+		CHECK(dup2(output[1], STDOUT_FILENO) == STDOUT_FILENO);
+		close(output[1]);
+		execl("/test/rsm/rsm-observe", "rsm-observe",
+		      "/test/rsm/bind-outcomes.rsm.bin", "--attach", "return",
+		      udp, "--read", selector, "2", "--read", "0", "1", "--",
+		      "/test/rsm/plugin_memory_test", "bind-workload",
+		      (char *)NULL);
+		_exit(127);
+	}
+	CHECK(close(output[1]) == 0);
+	FILE *stream = fdopen(output[0], "r");
+	CHECK(stream != NULL);
+	int counts = 0, missing = 0, workload = 0;
+	char *line = NULL;
+	size_t capacity = 0;
+	while (getline(&line, &capacity, stream) >= 0) {
+		fputs(line, stdout);
+		counts += strcmp(line, report) == 0;
+		missing += strcmp(line, "map 0: no samples\n") == 0;
+		workload += strcmp(line, "bind workload complete\n") == 0;
+	}
+	free(line);
+	CHECK(!ferror(stream) && fclose(stream) == 0);
+	int status;
+	CHECK(waitpid(child, &status, 0) == child);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 23);
+	CHECK(counts == 1 && missing == 1 && workload == 1);
+	check_word_error(0, 0, ENOENT);
+	CHECK(rsm(RSM_UNLOAD, 0, 0) == -1 && errno == ENOENT);
+	puts("PASS: userspace controller reported named maps and returned the workload's exit status");
+}
+
 int main(int argc, char **argv)
 {
 	CHECK(argc == 2);
+	if (strcmp(argv[1], "bind-workload") == 0) {
+		exercise_bind_conflicts(SOCK_DGRAM, 3);
+		puts("bind workload complete");
+		return 23;
+	}
+	if (strcmp(argv[1], "showcases") == 0) {
+		check_open_intent();
+		check_bind_outcomes();
+		check_page_faults();
+		check_futex_wait();
+		check_showcase_driver();
+		puts("RSM_SHOWCASES_QEMU_PASS");
+		return 0;
+	}
 	read_hook = find_hook("aster_core::syscall::read::sys_read");
 	if (strcmp(argv[1], "maps") == 0) {
 		check_histogram();

@@ -89,6 +89,9 @@ resulting v2 artifact. Pass the file to `run-kernel-tests.py --observer-artifact
 Use `--source path/to/observer.rs` to compile a different observer. The
 [stateful examples](../../book/src/kernel/rsm-function-hooks.md#run-the-stateful-examples)
 include the build commands and the two-CPU QEMU regression.
+The [workload tracing guide](../../book/src/kernel/rsm-function-hooks.md#trace-a-workload)
+shows how to use `rsm-observe` to measure file opens, socket binds, page faults,
+and futex waits around a shell command inside the guest.
 
 On an ARM64 Linux build host, install the pinned nightly's
 `x86_64-unknown-linux-gnu` standard library, an x86-64 GNU cross toolchain,
@@ -98,4 +101,8 @@ Ubuntu cross sysroot, set these before running the same build command.
 ```sh
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
 export QEMU_LD_PREFIX=/usr/x86_64-linux-gnu
+export LIBRARY_PATH="$(rustc +nightly-2026-05-01 --print sysroot)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 ```
+
+`LIBRARY_PATH` lets the native linker find the LLVM library shipped with the
+Rssembly driver's pinned nightly.
