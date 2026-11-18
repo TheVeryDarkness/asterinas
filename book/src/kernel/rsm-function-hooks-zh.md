@@ -296,8 +296,10 @@ awk -F '\t' '$2 == "aster_core::syscall::read::sys_read"' /proc/rsm/hooks
 
 需要准备当前 RSM loader 支持的可信原生 artifact；入口名为 `main`。
 直接加载 Rust 源文件、普通共享库或 Linux eBPF 字节码不属于这个接口。
-完整的现成用例在 `test/initramfs/src/regression/rsm/function_hooks_test.c`，
-它使用同目录的 `syscall_bench_artifact.h` 测试产物。
+回归程序 `test/initramfs/src/regression/rsm/function_hooks_test.c`
+保留了编译好的 v1 测试插件，也可以加载从 Rust 源码编译的 v2 插件。
+v2 插件可以携带字符串等只读数据。加载器按编译器给出的偏移完成重定位，
+将代码页设为可读、可执行，将数据页设为只读、不可执行。
 
 函数 hook 传给入口的七个 `u64` 槽位依次为：
 
@@ -502,6 +504,22 @@ python3 tools/rsm-instrument/test-runner.py
 python3 tools/rsm-instrument/run-kernel-tests.py --smp 2
 python3 tools/rsm-instrument/run-kernel-tests.py --smp 2 --profile release-lto
 ```
+
+要验证当前 Rssembly 生成的 v2 插件，先在 Linux 上将测试插件编译为 x86-64 机器码，
+再在 Asterinas 开发容器中把生成的文件传给 QEMU 测试。
+
+```sh
+python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
+    target/rsm-function-hooks/function-hook-observer.rsm.bin
+python3 tools/rsm-instrument/run-kernel-tests.py --smp 2 \
+    --observer-artifact target/rsm-function-hooks/function-hook-observer.rsm.bin
+```
+
+如果编译主机是 ARM64，交叉编译所需的工具和环境变量见 `tools/rsm-instrument/README.md`。
+Runner 打印打包到 initramfs 的文件的 SHA-256。
+Guest 把插件挂在 `sys_read` 的入口和返回处，然后调用 `read(-1, &byte, 1)`。
+它检查原调用返回 `EBADF`、`/proc/rsm/log` 中的两条消息顺序正确，且计数器增加一次。
+三项均通过后，串口日志会出现 `FUNCTION_HOOKS_V2_OBSERVER_PASS`。
 
 Runner 构建本 checkout 的 OSDK 和最小 initramfs，日志写到 `target/rsm-function-hooks/`。
 本次完整记录位于工作区的 `target/rsm-function-hooks/validation/summary.md`，

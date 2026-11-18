@@ -3,7 +3,7 @@
 //! A fixed-capacity byte ring that records messages from verified RSM programs.
 //!
 //! The ring backs `/proc/rsm_log` and is written by the RSM helper dispatcher in
-//! [`super::trampoline`] when it handles helper index 2 (`rsm_printk`). It lives in `aster-rsm` rather
+//! [`super::trampoline`] for `rsm_printk` and `rsm_printk_bytes`. It lives in `aster-rsm` rather
 //! than `aster-core` because the trampoline is its sole writer: keeping the buffer
 //! next to its writer avoids a callback across the crate boundary and keeps the
 //! write path on the system-call entry allocation-free and panic-free. `aster-core`

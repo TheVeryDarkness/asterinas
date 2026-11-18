@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-// Exercises generated function hooks with the existing, offline-verified RSM
-// benchmark artifact. Its first payload slot selects the helper-call fanout:
-// entry phase 0 performs no helper calls and return phase 1 increments once.
+// The embedded v1 benchmark and optional compiled v2 observer exercise the
+// same hook interface across two generations of the native artifact format.
 #include "syscall_bench_artifact.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <sched.h>
@@ -332,8 +332,58 @@ static void check_legacy_attachment(void)
 	puts("PASS: legacy syscall attachment still executes the verified artifact");
 }
 
-int main(void)
+static void check_v2_observer(const char *path)
 {
+	FILE *file = fopen(path, "rb");
+	CHECK(file != NULL && fseek(file, 0, SEEK_END) == 0);
+	long size = ftell(file);
+	CHECK(size >= 12 && fseek(file, 0, SEEK_SET) == 0);
+	unsigned char *artifact = malloc(size);
+	CHECK(artifact != NULL);
+	CHECK(fread(artifact, 1, size, file) == (size_t)size);
+	CHECK(fclose(file) == 0);
+	CHECK(memcmp(artifact, "RSMPIC\0\0\2\0\0\0", 12) == 0);
+	CHECK(rsm(RSM_LOAD, (uintptr_t)artifact, size) == 0);
+	free(artifact);
+
+	int log = open("/proc/rsm/log", O_WRONLY);
+	CHECK(log >= 0 && write(log, "\n", 1) >= 0 && close(log) == 0);
+	struct hook_stats entry = hook_stats(read_hook, HOOK_ENTRY);
+	struct hook_stats ret = hook_stats(read_hook, HOOK_RETURN);
+	uint64_t counter = program_counter();
+	CHECK(rsm(RSM_ATTACH_HOOK, read_hook, HOOK_ENTRY) == 0);
+	CHECK(rsm(RSM_ATTACH_HOOK, read_hook, HOOK_RETURN) == 0);
+	char byte;
+	errno = 0;
+	CHECK(syscall(SYS_read, -1, &byte, 1) == -1 && errno == EBADF);
+	CHECK(rsm(RSM_DETACH_HOOK, read_hook, HOOK_RETURN) == 0);
+	CHECK(rsm(RSM_DETACH_HOOK, read_hook, HOOK_ENTRY) == 0);
+	struct hook_stats after_entry = hook_stats(read_hook, HOOK_ENTRY);
+	struct hook_stats after_ret = hook_stats(read_hook, HOOK_RETURN);
+	CHECK(after_entry.invocations == entry.invocations + 1);
+	CHECK(after_ret.invocations == ret.invocations + 1);
+	CHECK(after_entry.skipped == entry.skipped &&
+	      after_entry.traps == entry.traps);
+	CHECK(after_ret.skipped == ret.skipped && after_ret.traps == ret.traps);
+	CHECK(program_counter() == counter + 1);
+
+	// The observer emits these literals only for the expected phase and payload.
+	static const char expected[] = "rsm-v2-entry\nrsm-v2-return\n";
+	char messages[sizeof(expected)];
+	file = fopen("/proc/rsm/log", "r");
+	CHECK(file != NULL);
+	CHECK(fread(messages, 1, sizeof(messages), file) ==
+	      sizeof(expected) - 1);
+	CHECK(!ferror(file) &&
+	      memcmp(messages, expected, sizeof(expected) - 1) == 0);
+	CHECK(fclose(file) == 0);
+	printf("FUNCTION_HOOKS_V2_OBSERVER_PASS: %ld bytes, rsm-v2-entry + rsm-v2-return, entry=1 return=1 counter_delta=1\n",
+	       size);
+}
+
+int main(int argc, char *argv[])
+{
+	CHECK(argc == 1 || argc == 2);
 	CHECK(atexit(cleanup) == 0);
 	discover_hooks();
 	CHECK(rsm(RSM_LOAD, (uintptr_t)syscall_bench_artifact,
@@ -344,6 +394,8 @@ int main(void)
 	check_concurrent_detach();
 	check_pending_return_generation();
 	check_legacy_attachment();
+	if (argc == 2)
+		check_v2_observer(argv[1]);
 	puts("FUNCTION_HOOKS_TEST_PASS");
 	return 0;
 }

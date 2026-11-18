@@ -72,3 +72,27 @@ named alias or macro-sensitive body can require excluding that function.
 The tool preserves optimization settings. Instrumentation overhead should be
 measured against the same build profile with instrumentation disabled, enabled
 without attachments, and enabled with observers.
+
+## Build the regression observer
+
+The observer build requires Linux, Python 3.11+, Cargo, and the pinned Rust
+toolchain from the Rssembly checkout (including `rustc-dev` and `rust-src`).
+
+```sh
+python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
+    target/rsm-function-hooks/function-hook-observer.rsm.bin
+```
+
+The helper compiles `function-hook-observer.rs` to Rssembly bytecode and runs
+the x86-64 `rsm-emit --host` verifier and emitter. It prints the SHA-256 of the
+resulting v2 artifact. Pass the file to `run-kernel-tests.py --observer-artifact`.
+
+On an ARM64 Linux build host, install the pinned nightly's
+`x86_64-unknown-linux-gnu` standard library, an x86-64 GNU cross toolchain,
+and an x86-64 userspace runner. With Docker's x86-64 binary emulation and the
+Ubuntu cross sysroot, set these before running the same build command.
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+export QEMU_LD_PREFIX=/usr/x86_64-linux-gnu
+```

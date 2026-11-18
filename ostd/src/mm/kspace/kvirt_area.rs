@@ -201,7 +201,7 @@ impl KVirtArea {
         Self { range }
     }
 
-    /// Changes the access flags of every page in the area.
+    /// Changes the access flags of each page in a subrange of the area.
     ///
     /// Only [`PageFlags`] are replaced; the privileged flags and cache policy
     /// of each page are preserved.
@@ -213,14 +213,16 @@ impl KVirtArea {
     /// keeps the old permissions: executing the newly read-execute code faults,
     /// or a stale writable entry lets a CPU write memory that is supposed to be
     /// immutable.
-    pub(crate) unsafe fn protect(&mut self, flags: PageFlags) {
+    pub(crate) unsafe fn protect(&mut self, range: Range<Vaddr>, flags: PageFlags) {
+        assert!(self.start() <= range.start && range.end <= self.end());
+        assert!(range.start < range.end);
+        assert!(range.start.is_multiple_of(PAGE_SIZE) && range.end.is_multiple_of(PAGE_SIZE));
         let irq_guard = irq::disable_local();
 
         let page_table = KERNEL_PAGE_TABLE.get().unwrap();
-        let range = self.start()..self.end();
         let mut cursor = page_table.cursor_mut(&irq_guard, &range).unwrap();
         loop {
-            let remaining = self.end() - cursor.virt_addr();
+            let remaining = range.end - cursor.virt_addr();
             // SAFETY: Replacing only the access flags of pages that this area
             // owns cannot affect kernel memory safety, and it leaves the
             // reserved `AVAIL1` privileged flag untouched.

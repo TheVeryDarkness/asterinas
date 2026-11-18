@@ -145,6 +145,13 @@ and does not authenticate or verify uploaded code at load time.
 The existing native adapter still contains its documented unsafe boundary.
 Function hooks do not turn that loader into an untrusted-code sandbox.
 
+The x86-64 loader accepts Rssembly v1 and v2 machine artifacts.
+Version 2 lets an observer refer to read-only data such as string literals.
+The loader preserves the image offsets specified by the compiler,
+applies the code and data relocations, and maps the code and data on separate pages.
+Code pages are read-execute and data pages are read-only and non-executable.
+The image alignment must be a power of two up to the kernel page size.
+
 ## Validation and measurement
 
 The generator's semantic tests compile and execute generated Rust:
@@ -166,6 +173,27 @@ The runner builds a checkout-local OSDK and a minimal initramfs,
 then tests discovery, native observer invocation, normal and error returns,
 detach and replacement, concurrency, and the legacy syscall observer.
 Logs are written under `target/rsm-function-hooks/`.
+
+To test both artifact versions, first compile the Rust observer
+with a local Rssembly checkout on Linux.
+On an ARM64 host, follow the cross-compilation instructions
+in `tools/rsm-instrument/README.md`.
+Then pass that file to the QEMU runner in the Asterinas development container.
+
+```sh
+python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
+    target/rsm-function-hooks/function-hook-observer.rsm.bin
+python3 tools/rsm-instrument/run-kernel-tests.py --smp 2 \
+    --observer-artifact target/rsm-function-hooks/function-hook-observer.rsm.bin
+```
+
+The runner prints the SHA-256 of the artifact it puts in the initramfs.
+The guest attaches the observer to both phases of `sys_read`
+and calls `read(-1, &byte, 1)`.
+It checks the two phase-specific messages in `/proc/rsm/log`,
+a single counter increment, and the original `EBADF` result.
+The serial log contains `FUNCTION_HOOKS_V2_OBSERVER_PASS` when these checks pass.
+
 Software-emulated QEMU results establish functionality, not paper-quality timing.
 For performance measurements, compare the same optimized build profile
 without instrumentation, with unattached hooks, and with attached observers.

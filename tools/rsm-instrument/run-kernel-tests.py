@@ -9,6 +9,7 @@ container; it does not require KVM or the full distribution's test disks.
 """
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import platform
@@ -27,7 +28,11 @@ INIT_SOURCE = r"""// SPDX-License-Identifier: MPL-2.0
 #include <sys/wait.h>
 #include <unistd.h>
 
-static int run(const char *program)
+#ifndef RSM_OBSERVER_PATH
+#define RSM_OBSERVER_PATH NULL
+#endif
+
+static int run(const char *program, const char *argument)
 {
     pid_t child = fork();
     if (child < 0) {
@@ -35,7 +40,7 @@ static int run(const char *program)
         return 1;
     }
     if (child == 0) {
-        execl(program, program, (char *)NULL);
+        execl(program, program, argument, (char *)NULL);
         perror(program);
         _exit(127);
     }
@@ -57,9 +62,9 @@ int main(void)
         failed = 1;
     }
     if (!failed)
-        failed = run("/test/rsm/function_hooks_test");
+        failed = run("/test/rsm/function_hooks_test", RSM_OBSERVER_PATH);
     if (!failed)
-        failed = run("/test/rsm/rsm_test");
+        failed = run("/test/rsm/rsm_test", NULL);
     puts(failed ? "FUNCTION_HOOKS_QEMU_FAIL" : "FUNCTION_HOOKS_QEMU_PASS");
     reboot(RB_POWER_OFF);
     for (;;)
@@ -68,7 +73,7 @@ int main(void)
 """
 
 
-def build_initramfs(root, output, compiler):
+def build_initramfs(root, output, compiler, observer):
     """Build the current tests and archive a minimal, self-contained rootfs."""
     tests = root / "test/initramfs/src/regression/rsm"
     image = output / "initramfs"
@@ -84,8 +89,20 @@ def build_initramfs(root, output, compiler):
         )
     init_source = output / "test_init.c"
     init_source.write_text(INIT_SOURCE)
+    init_flags = []
+    observer_file = binaries / "function-hook-observer.rsm.bin"
+    if observer is not None:
+        artifact = observer.read_bytes()
+        if not artifact.startswith(b"RSMPIC\0\0\x02\0\0\0"):
+            raise ValueError(f"{observer} is not an Rssembly v2 machine artifact")
+        observer_file.write_bytes(artifact)
+        print(f"QEMU observer: {observer} ({len(artifact)} bytes, "
+              f"SHA-256 {hashlib.sha256(artifact).hexdigest()})", flush=True)
+        init_flags.append(f'-DRSM_OBSERVER_PATH="/test/rsm/{observer_file.name}"')
+    else:
+        observer_file.unlink(missing_ok=True)
     subprocess.run(
-        [compiler, "-O2", "-Wall", "-Wextra", "-Werror", "-static",
+        [compiler, *init_flags, "-O2", "-Wall", "-Wextra", "-Werror", "-static",
          str(init_source), "-o", str(image / "init")],
         check=True,
     )
@@ -174,6 +191,8 @@ def main():
     parser.add_argument("--cc", default="x86_64-linux-gnu-gcc")
     parser.add_argument("--profile", default="dev", choices=["dev", "release", "release-lto"])
     parser.add_argument("--build-only", action="store_true")
+    parser.add_argument("--observer-artifact", type=Path,
+                        help="run the function-hook observer regression with this v2 artifact")
     args = parser.parse_args()
     if platform.system() != "Linux":
         parser.error("run inside the Asterinas Linux development container")
@@ -186,7 +205,7 @@ def main():
         parser.error(f"refusing to replace existing configuration: {manifest}")
     output = root / "target/rsm-function-hooks" / f"{args.profile}-smp{args.smp}"
     output.mkdir(parents=True, exist_ok=True)
-    archive = build_initramfs(root, output, args.cc)
+    archive = build_initramfs(root, output, args.cc, args.observer_artifact)
     serial = output / "serial.log"
     serial.unlink(missing_ok=True)
     configuration = f'''# Temporary focused function-hook regression configuration.
@@ -234,7 +253,8 @@ log_file = "{serial}"
         for line in contents.splitlines():
             if "PASS:" in line or "FAIL" in line or "FUNCTION_HOOKS_" in line:
                 print(line)
-        if ("FUNCTION_HOOKS_TEST_PASS" not in contents
+        if ((args.observer_artifact and "FUNCTION_HOOKS_V2_OBSERVER_PASS" not in contents)
+                or "FUNCTION_HOOKS_TEST_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_FAIL" in contents):
             raise SystemExit(f"function-hook regression did not pass ({returncode}); see {output}")

@@ -6,8 +6,8 @@
 //! module supplies the RSM-specific dispatcher and the invocation state it
 //! reads. Helper `index 0` atomically increments the program's counter,
 //! `index 1` (`get_kernel_time_ns`) returns the monotonic time since boot in
-//! nanoseconds, and `index 2` (`rsm_printk`) appends a byte range to the
-//! [`crate::log`] ring.
+//! nanoseconds, and `index 2` (`rsm_printk`) appends a message to the
+//! [`crate::log`] ring. Version 2 also provides `rsm_printk_bytes` at index 3.
 //!
 //! # Trust boundary
 //!
@@ -37,14 +37,23 @@ pub struct HostInvocation {
     table: HostCallbackTable,
     /// Points to the program's counter.
     counter: *const core::sync::atomic::AtomicU64,
+    interface_version: u32,
 }
 
 impl HostInvocation {
-    /// Builds the invocation state for the given counter.
+    /// Builds the legacy invocation state for the given counter.
     pub fn new(counter: &core::sync::atomic::AtomicU64) -> Self {
+        Self::with_version(counter, 1)
+    }
+
+    pub(crate) fn with_version(
+        counter: &core::sync::atomic::AtomicU64,
+        interface_version: u32,
+    ) -> Self {
         Self {
             table: HostCallbackTable { dispatch },
             counter: counter as *const _,
+            interface_version,
         }
     }
 }
@@ -97,7 +106,7 @@ fn monotonic_nanoseconds() -> u64 {
 /// # Safety
 ///
 /// `host` must point to a live, exclusively borrowed [`HostInvocation`];
-/// `output` must point to writable, aligned [`AbiScalar`] storage. For index 2,
+/// `output` must point to writable, aligned [`AbiScalar`] storage. For the logging helpers,
 /// `args` must point to two readable, initialized [`AbiScalar`] slots holding
 /// the byte pointer and the length.
 unsafe extern "C" fn dispatch(
@@ -128,14 +137,16 @@ unsafe extern "C" fn dispatch(
             unsafe { (*(output as *mut AbiScalar)).bits = monotonic_nanoseconds() };
             HOST_OK
         }
-        2 => {
+        // V1's byte pair, v2's &str and v2's raw byte helper all lower to
+        // the same two ABI slots: address followed by byte length.
+        2 | 3 if index == 2 || invocation.interface_version == 2 => {
             let args = args as *const AbiScalar;
             if args.is_null() {
                 return HOST_UNKNOWN;
             }
 
             // SAFETY: The caller supplies the two readable, initialized
-            // argument slots for helper index 2.
+            // argument slots for this logging helper.
             let len = unsafe { (*args.add(1)).bits } as usize;
             let len = len.min(MAX_MESSAGE_BYTES);
             if len == 0 {
@@ -143,7 +154,7 @@ unsafe extern "C" fn dispatch(
             }
 
             // SAFETY: The caller supplies the two readable, initialized
-            // argument slots for helper index 2.
+            // argument slots for this logging helper.
             let ptr = unsafe { (*args).bits } as usize;
             let Some(end) = ptr.checked_add(len) else {
                 return HOST_UNKNOWN;

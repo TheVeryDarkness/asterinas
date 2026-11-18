@@ -26,6 +26,7 @@ const MAX_ENTRY_STACK_BYTES: usize = 128 * 1024;
 pub struct RsmProgram {
     executable: ExecutableProgram,
     entry: Vaddr,
+    interface_version: u32,
     native_stack_bytes: usize,
     counter: core::sync::atomic::AtomicU64,
 }
@@ -43,10 +44,14 @@ impl RsmProgram {
             return Err(RsmError::StackBound);
         }
 
-        let mut program = NativeProgram::new(artifact.code.len())?;
+        let mut program = NativeProgram::with_rodata(
+            artifact.code.len(),
+            artifact.data_offset..artifact.image_len(),
+            artifact.alignment,
+        )?;
         let base = program.base();
         let slice = program.as_mut_slice();
-        slice[..artifact.code.len()].copy_from_slice(&artifact.code);
+        artifact.write_image(slice)?;
         apply_relocations(
             &artifact,
             slice,
@@ -62,6 +67,7 @@ impl RsmProgram {
         Ok(Self {
             executable,
             entry,
+            interface_version: artifact.interface_version,
             native_stack_bytes,
             counter: core::sync::atomic::AtomicU64::new(0),
         })
@@ -89,7 +95,7 @@ impl RsmProgram {
             slot.bits = *arg;
         }
 
-        let invocation = HostInvocation::new(&self.counter);
+        let invocation = HostInvocation::with_version(&self.counter, self.interface_version);
         let mut context = ExecContext {
             trap: TrapRecord {
                 kind: 0,
