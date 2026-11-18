@@ -20,6 +20,8 @@
 //! this module cannot re-establish that trust, it can only pass it through. See
 //! the `# Safety` sections below.
 
+pub mod rsm;
+
 use core::ffi::c_void;
 
 /// Status returned for a successful helper call.

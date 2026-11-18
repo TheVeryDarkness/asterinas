@@ -4,12 +4,15 @@
 
 use core::{ffi::c_void, sync::atomic::Ordering};
 
-use ostd::mm::{ExecutableProgram, NativeProgram, Vaddr, host_trampoline};
+use ostd::mm::{
+    ExecutableProgram, NativeProgram, Vaddr, callback::rsm::trampoline, native_heap::NativeHeapPool,
+};
 
 use crate::{
     abi::{AbiScalar, ExecContext, TrapRecord},
     artifact::{Artifact, DecodeError},
     reloc::{RelocateError, apply_relocations},
+    state::{ProgramState, StateError},
     trampoline::HostInvocation,
 };
 
@@ -22,13 +25,19 @@ const OBSERVER_ENTRY: &str = "main";
 /// the syscall path and interrupt frames keep headroom below the plugin.
 const MAX_ENTRY_STACK_BYTES: usize = 128 * 1024;
 
-/// A loaded, relocated RSM program with its fixed counter.
+/// A loaded RSM program. Attachments and in-flight callbacks hold an `Arc`
+/// to this object and therefore retain its maps and reserved allocator pool.
 pub struct RsmProgram {
     executable: ExecutableProgram,
     entry: Vaddr,
-    interface_version: u32,
+    memory: Option<ProgramMemory>,
     native_stack_bytes: usize,
     counter: core::sync::atomic::AtomicU64,
+}
+
+pub(crate) struct ProgramMemory {
+    pub(crate) maps: ProgramState,
+    pub(crate) native_heap: NativeHeapPool,
 }
 
 impl RsmProgram {
@@ -52,25 +61,37 @@ impl RsmProgram {
         let base = program.base();
         let slice = program.as_mut_slice();
         artifact.write_image(slice)?;
-        apply_relocations(
-            &artifact,
-            slice,
-            base,
-            host_trampoline as *const () as usize,
-        )?;
+        apply_relocations(&artifact, slice, base, trampoline as *const () as usize)?;
 
         let executable = program.finalize()?;
         let entry = executable
             .entry(code_offset as usize)
             .ok_or(RsmError::MissingEntry)?;
 
+        let memory = if artifact.interface_version == 2 && artifact.requires_host {
+            Some(ProgramMemory {
+                maps: ProgramState::new().map_err(|_| ostd::Error::NoMemory)?,
+                native_heap: NativeHeapPool::new()?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             executable,
             entry,
-            interface_version: artifact.interface_version,
+            memory,
             native_stack_bytes,
             counter: core::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// Reads one word of a named array owned by this program.
+    pub fn read_state_word(&self, key: u64, index: u64) -> Result<u64, StateError> {
+        self.memory
+            .as_ref()
+            .ok_or(StateError::Missing)?
+            .maps
+            .read_named(key, index)
     }
 
     /// Returns the current counter value.
@@ -95,7 +116,11 @@ impl RsmProgram {
             slot.bits = *arg;
         }
 
-        let invocation = HostInvocation::with_version(&self.counter, self.interface_version);
+        let invocation = HostInvocation::for_program(
+            &self.counter,
+            self.memory.as_ref(),
+            Some(&self.executable),
+        );
         let mut context = ExecContext {
             trap: TrapRecord {
                 kind: 0,
@@ -104,18 +129,19 @@ impl RsmProgram {
                 detail: 0,
             },
             reserved: [0; 2],
-            host: &invocation as *const HostInvocation as usize,
+            host: invocation.address(),
         };
         let mut output = AbiScalar { bits: 0 };
 
         // SAFETY: `entry` addresses verified code implementing the fixed ABI;
         // the context, event and output are live, disjoint storage for the call.
         unsafe {
-            self.executable.call(
+            self.executable.call_with_stack_bounds(
                 self.entry,
                 (&mut context as *mut ExecContext).cast::<c_void>(),
                 event.as_ptr().cast::<c_void>(),
                 (&mut output as *mut AbiScalar).cast::<c_void>(),
+                invocation.stack_bounds(),
             )
         }
     }

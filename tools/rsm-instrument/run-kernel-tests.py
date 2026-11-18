@@ -65,6 +65,14 @@ int main(void)
         failed = run("/test/rsm/function_hooks_test", RSM_OBSERVER_PATH);
     if (!failed)
         failed = run("/test/rsm/rsm_test", NULL);
+#ifdef RSM_TEST_MAPS
+    if (!failed)
+        failed = run("/test/rsm/plugin_memory_test", "maps");
+#endif
+#ifdef RSM_TEST_ALLOCATOR
+    if (!failed)
+        failed = run("/test/rsm/plugin_memory_test", "allocator");
+#endif
     puts(failed ? "FUNCTION_HOOKS_QEMU_FAIL" : "FUNCTION_HOOKS_QEMU_PASS");
     reboot(RB_POWER_OFF);
     for (;;)
@@ -73,7 +81,7 @@ int main(void)
 """
 
 
-def build_initramfs(root, output, compiler, observer):
+def build_initramfs(root, output, compiler, observer, state_observers, allocator_observer):
     """Build the current tests and archive a minimal, self-contained rootfs."""
     tests = root / "test/initramfs/src/regression/rsm"
     image = output / "initramfs"
@@ -81,7 +89,10 @@ def build_initramfs(root, output, compiler, observer):
     binaries.mkdir(parents=True, exist_ok=True)
     for directory in ["proc", "dev", "tmp"]:
         (image / directory).mkdir(exist_ok=True)
-    for name in ["function_hooks_test", "rsm_test"]:
+    programs = ["function_hooks_test", "rsm_test"]
+    if state_observers or allocator_observer:
+        programs.append("plugin_memory_test")
+    for name in programs:
         subprocess.run(
             [compiler, "-O2", "-Wall", "-Wextra", "-Werror", "-static", "-pthread",
              str(tests / f"{name}.c"), "-o", str(binaries / name)],
@@ -90,23 +101,32 @@ def build_initramfs(root, output, compiler, observer):
     init_source = output / "test_init.c"
     init_source.write_text(INIT_SOURCE)
     init_flags = []
-    observer_file = binaries / "function-hook-observer.rsm.bin"
-    if observer is not None:
-        artifact = observer.read_bytes()
+    artifacts = {}
+    if observer:
+        artifacts["function-hook-observer.rsm.bin"] = observer
+        init_flags.append('-DRSM_OBSERVER_PATH="/test/rsm/function-hook-observer.rsm.bin"')
+    if state_observers:
+        for name in ["read-histogram", "read-outcomes", "read-latency", "heap-snapshot"]:
+            filename = f"{name}.rsm.bin"
+            artifacts[filename] = state_observers / filename
+        init_flags.append("-DRSM_TEST_MAPS")
+    if allocator_observer:
+        artifacts["allocator.rsm.bin"] = allocator_observer
+        init_flags.append("-DRSM_TEST_ALLOCATOR")
+    for filename, source in artifacts.items():
+        artifact = source.read_bytes()
         if not artifact.startswith(b"RSMPIC\0\0\x02\0\0\0"):
-            raise ValueError(f"{observer} is not an Rssembly v2 machine artifact")
-        observer_file.write_bytes(artifact)
-        print(f"QEMU observer: {observer} ({len(artifact)} bytes, "
+            raise ValueError(f"{source} is not an Rssembly v2 machine artifact")
+        (binaries / filename).write_bytes(artifact)
+        print(f"QEMU observer: {source} ({len(artifact)} bytes, "
               f"SHA-256 {hashlib.sha256(artifact).hexdigest()})", flush=True)
-        init_flags.append(f'-DRSM_OBSERVER_PATH="/test/rsm/{observer_file.name}"')
-    else:
-        observer_file.unlink(missing_ok=True)
     subprocess.run(
         [compiler, *init_flags, "-O2", "-Wall", "-Wextra", "-Werror", "-static",
          str(init_source), "-o", str(image / "init")],
         check=True,
     )
-    paths = ["."] + sorted(str(path.relative_to(image)) for path in image.rglob("*"))
+    paths = [".", "dev", "init", "proc", "test", "test/rsm", "tmp"]
+    paths.extend(f"test/rsm/{name}" for name in [*programs, *artifacts])
     archive = output / "initramfs.cpio"
     with archive.open("wb") as destination:
         subprocess.run(
@@ -193,6 +213,10 @@ def main():
     parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--observer-artifact", type=Path,
                         help="run the function-hook observer regression with this v2 artifact")
+    parser.add_argument("--state-observers", type=Path,
+                        help="directory containing the compiled stateful example observers")
+    parser.add_argument("--allocator-observer", type=Path,
+                        help="compiled Rust allocator regression observer")
     args = parser.parse_args()
     if platform.system() != "Linux":
         parser.error("run inside the Asterinas Linux development container")
@@ -205,7 +229,8 @@ def main():
         parser.error(f"refusing to replace existing configuration: {manifest}")
     output = root / "target/rsm-function-hooks" / f"{args.profile}-smp{args.smp}"
     output.mkdir(parents=True, exist_ok=True)
-    archive = build_initramfs(root, output, args.cc, args.observer_artifact)
+    archive = build_initramfs(root, output, args.cc, args.observer_artifact,
+                              args.state_observers, args.allocator_observer)
     serial = output / "serial.log"
     serial.unlink(missing_ok=True)
     configuration = f'''# Temporary focused function-hook regression configuration.
@@ -251,9 +276,11 @@ log_file = "{serial}"
             return
         contents = serial.read_text(errors="replace") if serial.exists() else ""
         for line in contents.splitlines():
-            if "PASS:" in line or "FAIL" in line or "FUNCTION_HOOKS_" in line:
+            if "PASS:" in line or "FAIL" in line or "FUNCTION_HOOKS_" in line or "PLUGIN_" in line:
                 print(line)
         if ((args.observer_artifact and "FUNCTION_HOOKS_V2_OBSERVER_PASS" not in contents)
+                or (args.state_observers and "PLUGIN_STATE_QEMU_PASS" not in contents)
+                or (args.allocator_observer and "PLUGIN_ALLOCATOR_QEMU_PASS" not in contents)
                 or "FUNCTION_HOOKS_TEST_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_PASS" not in contents
                 or "FUNCTION_HOOKS_QEMU_FAIL" in contents):

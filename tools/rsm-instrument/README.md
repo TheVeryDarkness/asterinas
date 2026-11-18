@@ -86,6 +86,9 @@ python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
 The helper compiles `function-hook-observer.rs` to Rssembly bytecode and runs
 the x86-64 `rsm-emit --host` verifier and emitter. It prints the SHA-256 of the
 resulting v2 artifact. Pass the file to `run-kernel-tests.py --observer-artifact`.
+Use `--source path/to/observer.rs` to compile a different observer. The
+[stateful examples](../../book/src/kernel/rsm-function-hooks.md#run-the-stateful-examples)
+include the build commands and the two-CPU QEMU regression.
 
 On an ARM64 Linux build host, install the pinned nightly's
 `x86_64-unknown-linux-gnu` standard library, an x86-64 GNU cross toolchain,

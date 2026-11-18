@@ -8,14 +8,10 @@
 //!
 //! # Trust boundary
 //!
-//! The generic `unsafe` plumbing lives in OSTD: the call-in primitive is
-//! `ostd::mm::ExecutableProgram::call`, and the callback-out trampoline is
-//! `ostd::mm::callback::host_trampoline`. This crate retains only the
-//! RSM-specific dereferences of the pointers a verified program passes back
-//! (see `program::RsmProgram::observe` and the `trampoline` module), which are
-//! sound only because the loaded artifact was verified offline. Enabling
-//! `#![deny(unsafe_code)]` here is therefore deferred until the RSM verifier
-//! runs in-kernel at load time.
+//! OSTD implements the native entry and the Rssembly helper trampoline in
+//! `ostd::mm::callback::rsm`. OSTD decodes the native ABI slots and validates
+//! buffer ranges. The adapter invokes the entry under the existing requirement
+//! that a trusted producer verified the artifact offline.
 
 #![no_std]
 
@@ -29,6 +25,8 @@ pub mod log;
 #[cfg(feature = "ostd")]
 pub mod program;
 pub mod reloc;
+#[cfg(any(feature = "ostd", test))]
+mod state;
 #[cfg(feature = "ostd")]
 pub mod trampoline;
 
@@ -39,5 +37,7 @@ pub use artifact::{
 #[cfg(feature = "ostd")]
 pub use program::{RsmError, RsmProgram};
 pub use reloc::{RelocateError, apply_relocations};
+#[cfg(any(feature = "ostd", test))]
+pub use state::StateError;
 #[cfg(feature = "ostd")]
 pub use trampoline::HostInvocation;

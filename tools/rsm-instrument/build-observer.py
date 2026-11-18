@@ -19,13 +19,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rssembly", type=Path, help="Rssembly source checkout")
     parser.add_argument("output", type=Path, help="destination .rsm.bin file")
+    parser.add_argument("--source", type=Path,
+                        default=Path(__file__).with_name("function-hook-observer.rs"),
+                        help="Rust file containing the observer's exported main function")
     args = parser.parse_args()
     if platform.system() != "Linux":
         parser.error("the kernel observer requires the Linux x86-64 Rssembly JIT")
 
     rssembly = args.rssembly.resolve()
     output = args.output.resolve()
-    source = Path(__file__).resolve().with_name("function-hook-observer.rs")
+    source = args.source.resolve(strict=True)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     # Run Cargo in Rssembly so rustup uses its pinned compiler. cargo-rsmc
@@ -37,7 +40,9 @@ def main():
         nightly = tomllib.load(config)["toolchain"]["channel"]
     cargo("build", "--locked", "-p", "cargo-rsmc", "-p",
           f"rsm-rustc-driver-{nightly}")
-    with tempfile.TemporaryDirectory(prefix="rsm-observer-", dir=output.parent) as temp:
+    # Keep the compiler and its memory-mapped intermediates on the Linux build
+    # filesystem even when the requested artifact is on a shared host mount.
+    with tempfile.TemporaryDirectory(prefix="rsm-observer-") as temp:
         build = Path(temp)
         # A separate manifest keeps both source checkouts untouched. A fresh
         # package also makes Cargo run the driver's bytecode emission each time.
@@ -67,7 +72,10 @@ def main():
         data = artifact.read_bytes()
         if data[:12] != b"RSMPIC\x00\x00\x02\x00\x00\x00":
             raise ValueError("the emitter did not produce a version 2 machine artifact")
-        os.replace(artifact, output)
+        with tempfile.TemporaryDirectory(prefix=".rsm-publish-", dir=output.parent) as publish:
+            staged = Path(publish) / output.name
+            staged.write_bytes(data)
+            os.replace(staged, output)
     print(f"{hashlib.sha256(data).hexdigest()}  {output}")
 
 

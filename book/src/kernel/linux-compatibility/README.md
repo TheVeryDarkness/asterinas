@@ -16,7 +16,7 @@ support the loading of Linux kernel modules.
 
 This research fork also exposes `SYS_RSM` (number 500),
 an Asterinas-only extension for loading and attaching RSM observers.
-Its function-hook commands, argument restrictions, and privilege requirements
+Its function-hook commands, program-state inspection, unload behavior, and privilege requirements
 are documented in [RSM Function Hooks](../rsm-function-hooks.md).
 This extension is outside the Linux ABI and the Linux syscall coverage table below.
 

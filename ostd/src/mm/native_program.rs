@@ -26,6 +26,7 @@ pub struct NativeProgram {
     image_offset: usize,
     image_len: usize,
     code_len: usize,
+    rodata_start: usize,
 }
 
 impl NativeProgram {
@@ -89,6 +90,7 @@ impl NativeProgram {
             image_offset,
             image_len: rodata.end,
             code_len,
+            rodata_start: rodata.start,
         })
     }
 
@@ -148,6 +150,17 @@ impl ExecutableProgram {
         (offset < self.image.code_len).then(|| self.base() + offset)
     }
 
+    /// Borrows initialized bytes in this program's declared read-only data.
+    pub fn rodata_bytes(&self, address: Vaddr, len: usize) -> Option<&[u8]> {
+        let start = address.checked_sub(self.base())?;
+        if start < self.image.rodata_start || start.checked_add(len)? > self.image.image_len {
+            return None;
+        }
+        // SAFETY: The finalized mapping owns these initialized immutable
+        // data bytes for the returned borrow. No writable handle survives.
+        Some(unsafe { core::slice::from_raw_parts(address as *const u8, len) })
+    }
+
     /// Calls an entry thunk with the fixed three-pointer native ABI.
     ///
     /// # Safety
@@ -164,12 +177,54 @@ impl ExecutableProgram {
         arg1: *const c_void,
         arg2: *mut c_void,
     ) -> u32 {
+        // SAFETY: Forward the trusted entry and argument contracts.
+        unsafe { Self::call_inner(entry, arg0, arg1, arg2, None) }
+    }
+
+    /// Calls a trusted entry with a recorded boundary between the native and host frames.
+    ///
+    /// # Safety
+    ///
+    /// The contracts of [`Self::call`] apply. The entry's callback context
+    /// must use these same invocation bounds.
+    pub unsafe fn call_with_stack_bounds(
+        &self,
+        entry: Vaddr,
+        arg0: *mut c_void,
+        arg1: *const c_void,
+        arg2: *mut c_void,
+        bounds: &super::callback::rsm::NativeStackBounds,
+    ) -> u32 {
+        // SAFETY: Forward the trusted entry and argument contracts.
+        unsafe { Self::call_inner(entry, arg0, arg1, arg2, Some(bounds)) }
+    }
+
+    unsafe fn call_inner(
+        entry: Vaddr,
+        arg0: *mut c_void,
+        arg1: *const c_void,
+        arg2: *mut c_void,
+        bounds: Option<&super::callback::rsm::NativeStackBounds>,
+    ) -> u32 {
         // SAFETY: The caller upholds the entry-address contract documented
         // above.
         let entry_fn: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void) -> u32 =
             unsafe { core::mem::transmute(entry) };
-        // SAFETY: The caller upholds the pointer contracts documented above.
-        unsafe { entry_fn(arg0, arg1, arg2) }
+        #[cfg(target_arch = "x86_64")]
+        if let Some(bounds) = bounds {
+            let stack_pointer: usize;
+            // SAFETY: Read the current stack pointer without touching memory.
+            unsafe {
+                core::arch::asm!("mov {}, rsp", out(reg) stack_pointer, options(nomem, nostack, preserves_flags))
+            };
+            bounds.set_top(stack_pointer);
+        }
+        // SAFETY: The caller upholds the documented pointer contracts.
+        let status = unsafe { entry_fn(arg0, arg1, arg2) };
+        if let Some(bounds) = bounds {
+            bounds.set_top(0);
+        }
+        status
     }
 }
 
@@ -195,6 +250,16 @@ mod tests {
         image.as_mut_slice()[data_offset..].copy_from_slice(message);
 
         let executable = image.finalize().unwrap();
+        assert_eq!(
+            executable.rodata_bytes(executable.base() + data_offset, message.len()),
+            Some(&message[..])
+        );
+        assert!(executable.rodata_bytes(executable.base(), 1).is_none());
+        assert!(
+            executable
+                .rodata_bytes(executable.base() + data_offset, message.len() + 1)
+                .is_none()
+        );
         assert!(executable.entry(code_len - 1).is_some());
         assert!(executable.entry(code_len).is_none());
         assert!(executable.entry(data_offset).is_none());
@@ -209,6 +274,78 @@ mod tests {
             assert_eq!(prop.flags & PageFlags::RWX, expected);
             assert!(!prop.priv_flags.contains(PrivilegedPageFlags::GLOBAL));
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[ktest]
+    fn native_logging_accepts_its_frame_and_excludes_the_host_frame() {
+        use core::ffi::c_void;
+
+        use crate::mm::callback::{
+            HOST_OK, HOST_UNKNOWN,
+            rsm::{HelperAbi, HelperCall, HostHelpers, NativeCallbacks, trampoline},
+        };
+
+        struct Logger;
+        impl HostHelpers for Logger {
+            fn copy_log_bytes(&self, _: usize, _: usize, _: &mut [u8]) -> bool {
+                false
+            }
+            fn invoke(&self, call: HelperCall<'_>) -> Option<u64> {
+                matches!(call, HelperCall::Log(b"test")).then_some(1)
+            }
+        }
+        struct Context {
+            cookie: usize,
+            host_bytes: usize,
+        }
+
+        #[inline(never)]
+        unsafe extern "C" fn native(context: *mut c_void, _: *const c_void, _: *mut c_void) -> u32 {
+            // SAFETY: The test supplies a live context for this synchronous invocation.
+            let context = unsafe { &*context.cast::<Context>() };
+            let bytes = core::hint::black_box(*b"test");
+            for (address, expected) in [
+                (bytes.as_ptr().expose_provenance(), HOST_OK),
+                (context.host_bytes, HOST_UNKNOWN),
+            ] {
+                let args = [address as u64, bytes.len() as u64];
+                let mut result = 0u64;
+                // SAFETY: The cookie, two input slots and output are live. Both
+                // candidate byte ranges are initialized storage kept alive by the test.
+                let status = unsafe {
+                    trampoline(
+                        context.cookie as *mut c_void,
+                        3,
+                        args.as_ptr().cast(),
+                        (&raw mut result).cast(),
+                    )
+                };
+                if status != expected {
+                    return 1;
+                }
+            }
+            0
+        }
+
+        let callbacks = NativeCallbacks::new(HelperAbi::V2, 16, Logger);
+        let host_bytes = core::hint::black_box(*b"test");
+        let mut context = Context {
+            cookie: callbacks.address(),
+            host_bytes: host_bytes.as_ptr().expose_provenance(),
+        };
+        // SAFETY: The trusted Rust test entry implements the exact native ABI.
+        // It reads only context and its own frame, and ignores the null arguments.
+        let status = unsafe {
+            ExecutableProgram::call_inner(
+                native as *const () as usize,
+                (&raw mut context).cast(),
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                Some(callbacks.stack_bounds()),
+            )
+        };
+        assert_eq!(status, 0);
     }
 
     /// Stages a `mov eax, 42; ret` thunk, finalizes it, and calls it.

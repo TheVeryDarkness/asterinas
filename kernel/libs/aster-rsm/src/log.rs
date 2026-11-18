@@ -14,7 +14,7 @@ use ostd::sync::SpinLock;
 /// Maximum number of bytes a single `rsm_printk` call may append.
 ///
 /// Longer messages are truncated by the trampoline before reaching [`append`].
-pub const MAX_MESSAGE_BYTES: usize = 1024;
+pub const MAX_MESSAGE_BYTES: usize = ostd::mm::callback::rsm::MAX_LOG_BYTES;
 
 /// Capacity of the ring buffer in bytes.
 pub const LOG_CAPACITY_BYTES: usize = 4096;

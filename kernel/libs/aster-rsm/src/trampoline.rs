@@ -1,59 +1,167 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The host helper dispatch and its invocation state.
-//!
-//! The generic callback-out trampoline lives in `ostd::mm::callback`; this
-//! module supplies the RSM-specific dispatcher and the invocation state it
-//! reads. Helper `index 0` atomically increments the program's counter,
-//! `index 1` (`get_kernel_time_ns`) returns the monotonic time since boot in
-//! nanoseconds, and `index 2` (`rsm_printk`) appends a message to the
-//! [`crate::log`] ring. Version 2 also provides `rsm_printk_bytes` at index 3.
-//!
-//! # Trust boundary
-//!
-//! The dispatcher below dereferences pointers that ultimately originate from
-//! the compiled code (`host`, `args`, `output`). That is sound only if the code
-//! is itself trusted/verified; see `ostd::mm::callback` for the shared contract.
+//! Helper dispatch and invocation-local context for compiled RSM programs.
 
-use core::{ffi::c_void, sync::atomic::Ordering};
+#![forbid(unsafe_code)]
+
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ostd::mm::{
-    KERNEL_VADDR_RANGE,
-    callback::{HOST_OK, HOST_UNKNOWN, HostCallbackTable},
+    ExecutableProgram,
+    callback::rsm::{HelperAbi, HelperCall, HostHelpers, NativeCallbacks, NativeStackBounds},
+    native_heap::NativeHeapInvocation,
 };
 
 use crate::{
-    abi::AbiScalar,
     log::{MAX_MESSAGE_BYTES, append},
+    program::ProgramMemory,
+    state::ProgramState,
 };
 
-/// The invocation-local state the trampoline dispatches against.
-///
-/// `table` is the first field so `ostd::mm::callback::host_trampoline` can
-/// recover the dispatcher from the `host` pointer the compiled code passes
-/// back.
-#[repr(C)]
-pub struct HostInvocation {
-    table: HostCallbackTable,
-    /// Points to the program's counter.
-    counter: *const core::sync::atomic::AtomicU64,
-    interface_version: u32,
-}
+/// The callback cookie and borrowed program resources for one native invocation.
+#[repr(transparent)]
+pub struct HostInvocation<'a>(NativeCallbacks<Invocation<'a>>);
 
-impl HostInvocation {
-    /// Builds the legacy invocation state for the given counter.
-    pub fn new(counter: &core::sync::atomic::AtomicU64) -> Self {
-        Self::with_version(counter, 1)
+impl<'a> HostInvocation<'a> {
+    /// Builds the legacy helper context for the given counter.
+    pub fn new(counter: &'a AtomicU64) -> Self {
+        Self::for_program(counter, None, None)
     }
 
-    pub(crate) fn with_version(
-        counter: &core::sync::atomic::AtomicU64,
-        interface_version: u32,
+    pub(crate) fn for_program(
+        counter: &'a AtomicU64,
+        memory: Option<&'a ProgramMemory>,
+        executable: Option<&'a ExecutableProgram>,
     ) -> Self {
-        Self {
-            table: HostCallbackTable { dispatch },
-            counter: counter as *const _,
-            interface_version,
+        let abi = if memory.is_some() {
+            HelperAbi::V2
+        } else {
+            HelperAbi::V1
+        };
+        Self(NativeCallbacks::new(
+            abi,
+            MAX_MESSAGE_BYTES,
+            Invocation {
+                counter,
+                executable,
+                maps: memory.map(|memory| &memory.maps),
+                scratch: memory.map(|memory| memory.native_heap.invocation()),
+            },
+        ))
+    }
+
+    pub(crate) fn address(&self) -> usize {
+        self.0.address()
+    }
+
+    pub(crate) fn stack_bounds(&self) -> &NativeStackBounds {
+        self.0.stack_bounds()
+    }
+}
+
+struct Invocation<'a> {
+    counter: &'a AtomicU64,
+    executable: Option<&'a ExecutableProgram>,
+    maps: Option<&'a ProgramState>,
+    scratch: Option<NativeHeapInvocation<'a>>,
+}
+
+impl HostHelpers for Invocation<'_> {
+    fn copy_log_bytes(&self, address: usize, length: usize, prefix: &mut [u8]) -> bool {
+        if let Some(rodata) = self
+            .executable
+            .and_then(|image| image.rodata_bytes(address, length))
+            && let Some(source) = rodata.get(..prefix.len())
+        {
+            prefix.copy_from_slice(source);
+            return true;
+        }
+        self.scratch
+            .as_ref()
+            .is_some_and(|scratch| scratch.copy_bytes(address, length, prefix))
+    }
+
+    fn invoke(&self, call: HelperCall<'_>) -> Option<u64> {
+        match call {
+            HelperCall::Counter => {
+                Some(self.counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
+            }
+            HelperCall::TimeNs => Some(monotonic_nanoseconds()),
+            HelperCall::Log(bytes) => {
+                if !bytes.is_empty() {
+                    append(bytes);
+                    append(b"\n");
+                }
+                Some(0)
+            }
+            HelperCall::MapGetOrCreate { key, words } => {
+                Some(self.maps?.get_or_create(key, words).unwrap_or(0))
+            }
+            HelperCall::MapLoad { handle, index } => {
+                Some(self.maps?.load(handle, index).unwrap_or(0))
+            }
+            HelperCall::MapStore {
+                handle,
+                index,
+                value,
+            } => Some(u64::from(self.maps?.store(handle, index, value))),
+            HelperCall::MapFetchAdd {
+                handle,
+                index,
+                delta,
+            } => Some(self.maps?.fetch_add(handle, index, delta).unwrap_or(0)),
+            HelperCall::MapFree { handle } => Some(u64::from(self.maps?.free(handle))),
+            HelperCall::MapSaveBytes { handle, address } => {
+                let scratch = self.scratch.as_ref()?;
+                Some(u64::from(self.maps?.save_bytes(handle, |bytes| {
+                    scratch.read_allocation(address as usize, bytes)
+                })))
+            }
+            HelperCall::MapRestoreBytes { handle, address } => {
+                let scratch = self.scratch.as_ref()?;
+                Some(u64::from(self.maps?.restore_bytes(handle, |bytes| {
+                    scratch.write_allocation(address as usize, bytes)
+                })))
+            }
+            HelperCall::HeapAlloc { size, alignment } => {
+                let allocation = self.scratch.as_ref()?.allocate(
+                    usize::try_from(size).ok()?,
+                    usize::try_from(alignment).ok()?,
+                )?;
+                Some(allocation.as_ptr().expose_provenance() as u64)
+            }
+            HelperCall::HeapDealloc {
+                address,
+                size,
+                alignment,
+            } => self
+                .scratch
+                .as_ref()?
+                .deallocate(
+                    usize::try_from(address).ok()?,
+                    usize::try_from(size).ok()?,
+                    usize::try_from(alignment).ok()?,
+                )
+                .then_some(0),
+            HelperCall::HeapWriteByte {
+                address,
+                offset,
+                value,
+            } => Some(u64::from(self.scratch.as_ref()?.write_byte(
+                address as usize,
+                offset as usize,
+                value,
+            ))),
+            HelperCall::HeapReadByte { address, offset } => {
+                // 0x100 distinguishes invalid access from all valid byte values.
+                Some(
+                    self.scratch
+                        .as_ref()?
+                        .read_byte(address as usize, offset as usize)
+                        .map(u64::from)
+                        .unwrap_or(0x100),
+                )
+            }
         }
     }
 }
@@ -68,8 +176,6 @@ impl HostInvocation {
 fn monotonic_nanoseconds() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
-        use core::sync::atomic::AtomicU64;
-
         /// `(1e9 << 32) / tsc_frequency`, computed once.
         static TSC_TO_NANOSECONDS: AtomicU64 = AtomicU64::new(0);
 
@@ -98,97 +204,5 @@ fn monotonic_nanoseconds() -> u64 {
         ostd::timer::Jiffies::elapsed()
             .as_u64()
             .saturating_mul(1_000_000)
-    }
-}
-
-/// RSM's helper dispatcher.
-///
-/// # Safety
-///
-/// `host` must point to a live, exclusively borrowed [`HostInvocation`];
-/// `output` must point to writable, aligned [`AbiScalar`] storage. For the logging helpers,
-/// `args` must point to two readable, initialized [`AbiScalar`] slots holding
-/// the byte pointer and the length.
-unsafe extern "C" fn dispatch(
-    host: *mut c_void,
-    index: u32,
-    args: *const c_void,
-    output: *mut c_void,
-) -> u32 {
-    if output.is_null() {
-        return HOST_UNKNOWN;
-    }
-    // SAFETY: `host` points to the `HostInvocation` set by `RsmProgram::observe`,
-    // and `ostd::mm::callback::host_trampoline` has already rejected a null host.
-    let invocation = unsafe { &*(host as *const HostInvocation) };
-    match index {
-        0 => {
-            // SAFETY: `counter` is valid while the program lives.
-            let counter = unsafe { &*invocation.counter };
-            let value = counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-            // SAFETY: `output` is non-null and points to writable `AbiScalar`
-            // storage per the helper contract.
-            unsafe { (*(output as *mut AbiScalar)).bits = value };
-            HOST_OK
-        }
-        1 => {
-            // SAFETY: `output` is non-null and points to writable `AbiScalar`
-            // storage per the helper contract.
-            unsafe { (*(output as *mut AbiScalar)).bits = monotonic_nanoseconds() };
-            HOST_OK
-        }
-        // V1's byte pair, v2's &str and v2's raw byte helper all lower to
-        // the same two ABI slots: address followed by byte length.
-        2 | 3 if index == 2 || invocation.interface_version == 2 => {
-            let args = args as *const AbiScalar;
-            if args.is_null() {
-                return HOST_UNKNOWN;
-            }
-
-            // SAFETY: The caller supplies the two readable, initialized
-            // argument slots for this logging helper.
-            let len = unsafe { (*args.add(1)).bits } as usize;
-            let len = len.min(MAX_MESSAGE_BYTES);
-            if len == 0 {
-                return HOST_OK;
-            }
-
-            // SAFETY: The caller supplies the two readable, initialized
-            // argument slots for this logging helper.
-            let ptr = unsafe { (*args).bits } as usize;
-            let Some(end) = ptr.checked_add(len) else {
-                return HOST_UNKNOWN;
-            };
-
-            // Confine the read to the kernel address space. This is a defensive
-            // check, not the security boundary: the loader is the trust
-            // boundary, and verified programs may only pass pointers to memory
-            // the verifier proved they can read. Rejecting user and
-            // non-canonical addresses here still bounds a buggy program's
-            // reach and keeps `len` capped so a single call cannot scan memory.
-            if !KERNEL_VADDR_RANGE.contains(&ptr) || !KERNEL_VADDR_RANGE.contains(&end) {
-                return HOST_UNKNOWN;
-            }
-
-            // SAFETY:
-            // 1. `ptr` is non-null because `len > 0` and the range lies within
-            //    `KERNEL_VADDR_RANGE`, which excludes the null page.
-            // 2. `ptr..end` is a `len`-byte range inside the kernel address
-            //    space, so it addresses supervisor memory rather than user
-            //    memory. The producing program is admitted only through the
-            //    `require_rsm_capability`-gated loader, which is the trust
-            //    boundary that vouches for the pointer's live backing memory.
-            // 3. `len` is at most `MAX_MESSAGE_BYTES`, so the slice length
-            //    cannot overflow `isize::MAX`.
-            // 4. The trampoline only reads the bytes; it never writes through
-            //    the slice, so no aliasing rule is violated.
-            let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
-            append(bytes);
-            // Terminate each message so /proc/rsm_log stays line-oriented, like
-            // `bpf_trace_printk`'s trailing newline.
-            append(b"\n");
-            HOST_OK
-        }
-        _ => HOST_UNKNOWN,
     }
 }

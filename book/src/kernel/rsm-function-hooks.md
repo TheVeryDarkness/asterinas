@@ -55,6 +55,8 @@ The function-hook commands are:
 | 4 (`AttachHook`) | Hook ID | Phase | Attaches the loaded program to a vacant phase |
 | 5 (`DetachHook`) | Hook ID | Phase | Detaches the phase |
 | 6 (`ReadHookStats`) | Statistics pointer | Unused | Reads cumulative phase statistics |
+| 7 (`ReadStateWord`) | State-word request pointer | Unused | Reads one word of the currently loaded program's named storage |
+| 8 (`Unload`) | Unused | Unused | Releases an idle loaded program and its storage |
 
 Phase 0 is entry; phase 1 is normal return.
 Loading and changing attachments require `CAP_SYS_MODULE`.
@@ -103,6 +105,75 @@ struct rsm_hook_stats {
 Counters are cumulative for each hook phase and are not reset on reattachment.
 Concurrent reads are approximate; compare deltas around a controlled workload.
 
+## Keep state between hook calls
+
+Every successful load creates a new program instance.
+The instance owns its memory and all of its attachments share that memory.
+For example, a read-size histogram can reopen a named four-word array
+on every entry to `sys_read` and increment one bucket.
+
+```rust
+let histogram = rsm_map_get_or_create(0, 4);
+if histogram != 0 {
+    rsm_map_fetch_add(histogram, bucket, 1);
+}
+```
+
+The key is a program-chosen `u64`.
+Another instance may use the same key with its own length and contents.
+Each instance can hold 16 arrays of 1 to 64 `u64` words.
+The kernel reserves capacity at load and zeroes each newly allocated array.
+Hooks access words through bounds-checked helpers.
+
+| Rust operation in `rsm_apis` | Result |
+| --- | --- |
+| `rsm_map_get_or_create(key, words)` | Returns the existing handle for that key and length, or creates an array. Zero means an invalid length, a conflicting length, or exhausted capacity. |
+| `rsm_map_load(handle, index)` | Returns the word. An invalid handle or index returns zero. |
+| `rsm_map_store(handle, index, value)` | Stores a word and returns whether the operation succeeded. |
+| `rsm_map_fetch_add(handle, index, delta)` | Atomically adds with wrapping arithmetic and returns the previous value. An invalid handle or index returns zero. |
+| `rsm_map_free(handle)` | Deletes the named allocation and invalidates its handle. A stale or foreign handle returns false. |
+| `rsm_map_save_bytes(handle, base)` | Copies an entire live Rust allocation into this array. Eight consecutive bytes form one little-endian word. |
+| `rsm_map_restore_bytes(handle, base)` | Restores the complete array into a live Rust allocation belonging to the current callback. |
+
+Each helper operation is synchronized across CPUs.
+A sequence of separate loads and stores can interleave with another invocation.
+Use `fetch_add` for counters updated on multiple CPUs.
+Handles remain valid across detach and reattach until the allocation is freed or the instance is destroyed.
+The byte-copy helpers require an exact size match and return false without a partial update on failure.
+Each copy publishes or reads one complete snapshot.
+Two callbacks that read a snapshot, modify it, and save it can overwrite one another's changes.
+
+An administrator with `CAP_SYS_MODULE` can read a word using command 7.
+The request consists of three consecutive `uint64_t` fields named `key`, `index`, and `value`.
+The kernel fills in `value` on success.
+A missing program or key returns `ENOENT`. An out-of-range index returns `EINVAL`.
+Each call reads a single word from the instance it acquired.
+
+Command 8 requires the same capability. It returns `EBUSY` while an attachment,
+callback, or state reader still holds a reference.
+Replacing the loaded program leaves existing attachments on the old instance.
+Its last reference releases its storage, including any allocations the plugin left behind.
+Reloading the same artifact starts with empty maps.
+
+### Use Rust allocation inside a callback
+
+For scratch memory, the Rssembly frontend recognizes `std::alloc::alloc`
+and `std::alloc::dealloc` with a supported constant `Layout`.
+The verified heap operations are linked to the Asterinas allocator.
+The program reserves eight 512-byte regions when it is loaded.
+An invocation claims one region lazily and has exclusive access until it returns.
+It can allocate up to 16 live blocks with alignment up to 16 bytes.
+Padding counts toward the 512-byte budget. Freed addresses are retired for that invocation.
+The kernel releases outstanding blocks when a callback returns or is aborted.
+Exhaustion terminates that callback and increments the hook's `traps` counter.
+
+`rsm_heap_write_byte(base, offset, value)` and `rsm_heap_read_byte(base, offset)`
+check ownership and bounds. A failed write returns false and a failed read returns 256.
+Use these helpers to work with bytes and save results in a named array before returning.
+The compiler still checks proofs for direct raw-pointer dereferences.
+The tested Rust source uses the allocator functions directly.
+General `Box` and `Vec` support would also require their standard-library code paths.
+
 ## Execution and lifetime contract
 
 Native observer execution is currently supported on x86-64.
@@ -142,8 +213,10 @@ OSTD provides execution-context and stack-bound queries.
 The inherited RSM native loader remains a trusted research prototype:
 it accepts externally verified machine-code artifacts under `CAP_SYS_MODULE`
 and does not authenticate or verify uploaded code at load time.
-The existing native adapter still contains its documented unsafe boundary.
-Function hooks do not turn that loader into an untrusted-code sandbox.
+The adapter retains its existing unsafe call into OSTD. For v2 logging OSTD checks the
+entire requested range against the program's read-only data, the active native
+stack, or the current callback's live allocations. For stack buffers the external
+compiler must also ensure that the selected bytes belong to an initialized object.
 
 The x86-64 loader accepts Rssembly v1 and v2 machine artifacts.
 Version 2 lets an observer refer to read-only data such as string literals.
@@ -193,6 +266,36 @@ and calls `read(-1, &byte, 1)`.
 It checks the two phase-specific messages in `/proc/rsm/log`,
 a single counter increment, and the original `EBADF` result.
 The serial log contains `FUNCTION_HOOKS_V2_OBSERVER_PASS` when these checks pass.
+
+### Run the stateful examples
+
+The five observers below were tested with Rssembly revision
+`25dbf9e303c9ce0643e0bf7a84c1a5103399afd7` on `codex/plugin-memory`.
+Run the following commands from the Asterinas root in the Linux build environment.
+
+```sh
+for name in read-histogram read-outcomes read-latency heap-snapshot allocator; do
+    python3 tools/rsm-instrument/build-observer.py /path/to/rssembly \
+        "target/rsm-allocator/$name.rsm.bin" \
+        --source "tools/rsm-instrument/observers/$name.rs" || exit 1
+done
+python3 tools/rsm-instrument/run-kernel-tests.py --smp 2 \
+    --state-observers target/rsm-allocator \
+    --allocator-observer target/rsm-allocator/allocator.rsm.bin
+```
+
+| Observer | Result |
+| --- | --- |
+| `read-histogram` | Four read-size buckets shared across CPUs, readable even after detach. |
+| `read-outcomes` | Separate successful and failed read counts, with one log message on the third failure. |
+| `read-latency` | Matches entry and return by invocation ID, frees the temporary record, and accumulates completed samples and nanoseconds. |
+| `heap-snapshot` | Restores an eight-byte sample window into a fresh Rust allocation, records the next read size, and saves the whole buffer for later callbacks. Use it on a serialized stream. |
+| `allocator` | Writes and reads a hook-derived byte through a Rust allocation, frees it, and adds it to a persistent sum. |
+
+The latency example reserves key zero for totals and can track 15 reads in flight.
+A skipped return can leave an unmatched record until unload.
+Its third counter counts callbacks that encountered a full table or could not record a valid duration.
+Use the hook's skipped counter alongside the sample count when interpreting results.
 
 Software-emulated QEMU results establish functionality, not paper-quality timing.
 For performance measurements, compare the same optimized build profile
