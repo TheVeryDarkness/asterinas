@@ -84,6 +84,33 @@ impl Task {
         Some(unsafe { CurrentTask::new(current_task) })
     }
 
+    /// Returns the unused bytes below the current stack pointer on x86-64.
+    ///
+    /// Returns `None` outside a task stack or on an unsupported architecture.
+    /// The result is a snapshot; callers must reserve room for their own call
+    /// frames and interrupt handlers before admitting bounded native work.
+    pub fn kernel_stack_available_bytes() -> Option<usize> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let task = Self::current()?;
+            let stack_pointer: usize;
+            // SAFETY: Reading RSP does not modify registers, memory, flags, or
+            // the stack. The address is only compared with the task's bounds.
+            unsafe {
+                core::arch::asm!(
+                    "mov {}, rsp",
+                    out(reg) stack_pointer,
+                    options(nomem, nostack, preserves_flags),
+                );
+            }
+            task.kstack.available_bytes_at(stack_pointer)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            None
+        }
+    }
+
     pub(super) fn ctx(&self) -> &SyncUnsafeCell<TaskContext> {
         &self.ctx
     }

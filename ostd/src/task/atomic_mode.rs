@@ -29,6 +29,14 @@
 
 use core::sync::atomic::Ordering;
 
+/// Returns whether preemption or local interrupts are disabled.
+///
+/// This is a snapshot, not a guard: callers must acquire an appropriate guard
+/// when subsequent operations require the CPU or interrupt state to stay fixed.
+pub fn is_atomic_mode() -> bool {
+    super::preempt::cpu_local::get_guard_count() != 0 || !crate::arch::irq::is_local_enabled()
+}
+
 /// Marks a function as one that might sleep.
 ///
 /// This function will panic if it is executed in atomic mode.

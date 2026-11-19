@@ -3,7 +3,7 @@
 //! A fixed-capacity byte ring that records messages from verified RSM programs.
 //!
 //! The ring backs `/proc/rsm_log` and is written by the RSM helper dispatcher in
-//! [`super::trampoline`] when it handles helper index 2 (`rsm_printk`). It lives in `aster-rsm` rather
+//! [`super::trampoline`] for `rsm_printk` and `rsm_printk_bytes`. It lives in `aster-rsm` rather
 //! than `aster-core` because the trampoline is its sole writer: keeping the buffer
 //! next to its writer avoids a callback across the crate boundary and keeps the
 //! write path on the system-call entry allocation-free and panic-free. `aster-core`
@@ -14,7 +14,7 @@ use ostd::sync::SpinLock;
 /// Maximum number of bytes a single `rsm_printk` call may append.
 ///
 /// Longer messages are truncated by the trampoline before reaching [`append`].
-pub const MAX_MESSAGE_BYTES: usize = 1024;
+pub const MAX_MESSAGE_BYTES: usize = ostd::mm::callback::rsm::MAX_LOG_BYTES;
 
 /// Capacity of the ring buffer in bytes.
 pub const LOG_CAPACITY_BYTES: usize = 4096;

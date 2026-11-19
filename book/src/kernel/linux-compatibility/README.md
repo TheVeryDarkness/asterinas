@@ -14,6 +14,12 @@ support the loading of Linux kernel modules.
 
 ## System calls
 
+This research fork also exposes `SYS_RSM` (number 500),
+an Asterinas-only extension for loading and attaching RSM observers.
+Its function-hook commands, program-state inspection, unload behavior, and privilege requirements
+are documented in [RSM Function Hooks](../rsm-function-hooks.md).
+This extension is outside the Linux ABI and the Linux syscall coverage table below.
+
 At the time of writing,
 Asterinas supports over 240 Linux system calls for the x86-64 architecture,
 which are summarized in the table below.

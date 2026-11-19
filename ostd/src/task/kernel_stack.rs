@@ -96,4 +96,12 @@ impl KernelStack {
     pub(super) fn end_vaddr(&self) -> Vaddr {
         self.end_vaddr
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn available_bytes_at(&self, stack_pointer: Vaddr) -> Option<usize> {
+        let start = self.end_vaddr - KERNEL_STACK_SIZE;
+        (start..self.end_vaddr)
+            .contains(&stack_pointer)
+            .then(|| stack_pointer - start)
+    }
 }

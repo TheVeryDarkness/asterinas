@@ -63,6 +63,13 @@ The path is automatically inferred from the file's location in the source tree. 
 
 The Rust compiler requires that the expanded path should refer to an ancestor module; expanding to an unrelated module would result in a compilation error.
 
+Build tools that copy a source hierarchy into a generated directory can set
+`SHORT_VIS_PATH_GENERATED_ROOT` through `cargo:rustc-env` in their build script.
+Files under that directory use the same relative module paths as the original `src` tree.
+Original files continue to resolve against `CARGO_MANIFEST_DIR/src`.
+The generated directory must preserve the module hierarchy;
+this option does not relax Rust's ancestor-visibility checks.
+
 ## License
 
 MPL-2.0

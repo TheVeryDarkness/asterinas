@@ -47,15 +47,20 @@ pub mod device;
 mod driver;
 pub mod error;
 pub mod events;
+#[cfg(not(feature = "rsm-hooks"))]
 pub mod fs;
 mod init;
+#[cfg(not(feature = "rsm-hooks"))]
 mod ipc;
+#[cfg(not(feature = "rsm-hooks"))]
 mod net;
 pub mod power;
 pub mod prelude;
+#[cfg(not(feature = "rsm-hooks"))]
 pub mod process;
 mod sched;
 pub mod security;
+#[cfg(not(feature = "rsm-hooks"))]
 mod syscall;
 mod thread;
 mod time;
@@ -63,7 +68,11 @@ pub mod util;
 // TODO: Add vDSO support for LoongArch.
 #[cfg(not(target_arch = "loongarch64"))]
 mod vdso;
+#[cfg(not(feature = "rsm-hooks"))]
 pub mod vm;
+
+#[cfg(feature = "rsm-hooks")]
+include!(concat!(env!("OUT_DIR"), "/rsm-hook-modules.rs"));
 
 /// Boots the Asterinas core kernel.
 pub fn boot() {

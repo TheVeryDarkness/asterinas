@@ -5,6 +5,12 @@ It introduces [**System Call Matching Language (SCML)**](system-call-matching-la
 a lightweight domain‑specific language for
 specifying allowed and disallowed patterns of system‑call invocations.
 
+The research-only `SYS_RSM` extension, including state inspection and unload,
+is documented separately in
+[RSM Function Hooks](../../rsm-function-hooks.md).
+It uses the prototype's own command ABI,
+so it is not represented as Linux compatibility coverage in these SCML files.
+
 The rest of this section uses SCML
 to accurately and concisely describe
 both supported and unsupported functionality of system calls,

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MPL-2.0
+
+# Paths are relative to kernel/core/src. Unsupported signatures are reported
+# rather than rewritten. The running kernel's /proc/rsm/hooks is authoritative:
+# this source report also includes candidates excluded by the target's cfg.
+include = ["syscall/**", "fs/**", "net/**", "process/**", "vm/**", "ipc/**"]
+exclude = ["syscall/rsm.rs", "fs/fs_impls/procfs/rsm/**"]

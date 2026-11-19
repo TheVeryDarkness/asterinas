@@ -2,13 +2,15 @@
 
 //! RSM kernel extension subsystem.
 //!
-//! Loads verified, compiled RSM programs into executable kernel memory, attaches
-//! one to the system-call entry, and reports counters. All state is statically
-//! initialized, so the subsystem needs no runtime setup.
+//! Loads externally verified RSM artifacts, manages syscall and function-hook
+//! attachments, and exposes counters and program-owned state to userspace.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use aster_rsm::RsmProgram;
+use aster_rsm::{
+    RsmError, RsmProgram, StateError,
+    hooks::{self, HookError, Phase},
+};
 
 use super::SyscallReturn;
 use crate::{
@@ -64,6 +66,16 @@ enum RsmCmd {
     Detach = 2,
     /// Copies counter and invocation statistics to a user buffer.
     ReadStats = 3,
+    /// Attaches the loaded program to a generated function and phase.
+    AttachHook = 4,
+    /// Detaches a generated function's phase from future invocations.
+    DetachHook = 5,
+    /// Reads a generated function phase's cumulative statistics.
+    ReadHookStats = 6,
+    /// Reads one word of a named allocation belonging to the loaded program.
+    ReadStateWord = 7,
+    /// Releases the loaded program once attachments and active users have drained.
+    Unload = 8,
 }
 
 /// Dispatches the multiplexed `SYS_RSM` command.
@@ -77,7 +89,131 @@ pub(super) fn sys_rsm(cmd: u32, arg1: Vaddr, arg2: usize, ctx: &Context) -> Resu
         RsmCmd::Attach => rsm_attach(ctx),
         RsmCmd::Detach => rsm_detach(ctx),
         RsmCmd::ReadStats => rsm_read_stats(arg1, ctx),
+        RsmCmd::AttachHook => rsm_attach_hook(arg1 as u64, arg2 as u64, ctx),
+        RsmCmd::DetachHook => rsm_detach_hook(arg1 as u64, arg2 as u64, ctx),
+        RsmCmd::ReadHookStats => rsm_read_hook_stats(arg1, ctx),
+        RsmCmd::ReadStateWord => rsm_read_state_word(arg1, ctx),
+        RsmCmd::Unload => rsm_unload(ctx),
     }
+}
+
+/// Attaches the loaded program to one generated hook phase.
+fn rsm_attach_hook(id: u64, phase: u64, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let phase = hook_phase(phase)?;
+    hooks::find(id).map_err(hook_error)?;
+    let program = PROGRAM
+        .read()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| Error::new(Errno::ENOENT))?;
+    hooks::attach(id, phase, program).map_err(hook_error)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+/// Stops admitting new function invocations to one hook phase.
+fn rsm_detach_hook(id: u64, phase: u64, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let phase = hook_phase(phase)?;
+    hooks::detach(id, phase).map_err(hook_error)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+/// Copies cumulative hook counters without exposing kernel addresses.
+fn rsm_read_hook_stats(address: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
+    let user_space = ctx.user_space();
+    let mut request = user_space
+        .reader(address, size_of::<RsmHookStats>())?
+        .read_val::<RsmHookStats>()?;
+    if request.reserved != 0 {
+        return_errno_with_message!(Errno::EINVAL, "reserved hook statistics field is nonzero");
+    }
+    let phase = hook_phase(u64::from(request.phase))?;
+    let stats = hooks::find(request.hook_id)
+        .map_err(hook_error)?
+        .stats(phase);
+    request.invocations = stats.invocations;
+    request.skipped = stats.skipped;
+    request.traps = stats.traps;
+    user_space
+        .writer(address, size_of::<RsmHookStats>())?
+        .write_val(&request)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn hook_phase(value: u64) -> Result<Phase> {
+    Phase::from_raw(value).ok_or_else(|| Error::new(Errno::EINVAL))
+}
+
+fn hook_error(error: HookError) -> Error {
+    Error::new(match error {
+        HookError::NotFound | HookError::NotAttached => Errno::ENOENT,
+        HookError::AlreadyAttached => Errno::EBUSY,
+        HookError::Ambiguous => Errno::EINVAL,
+        HookError::GenerationExhausted => Errno::EOVERFLOW,
+    })
+}
+
+/// The input identity and output counters for `READ_HOOK_STATS`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod)]
+struct RsmHookStats {
+    hook_id: u64,
+    phase: u32,
+    reserved: u32,
+    invocations: u64,
+    skipped: u64,
+    traps: u64,
+}
+
+/// A key and word index in the current program's named storage.
+#[repr(C)]
+#[derive(Clone, Copy, Pod)]
+struct RsmStateWord {
+    key: u64,
+    index: u64,
+    value: u64,
+}
+
+fn rsm_read_state_word(address: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let user_space = ctx.user_space();
+    let mut request = user_space
+        .reader(address, size_of::<RsmStateWord>())?
+        .read_val::<RsmStateWord>()?;
+    let program = PROGRAM
+        .read()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| Error::new(Errno::ENOENT))?;
+    request.value = program
+        .read_state_word(request.key, request.index)
+        .map_err(|error| {
+            Error::new(match error {
+                StateError::Missing => Errno::ENOENT,
+                StateError::OutOfBounds => Errno::EINVAL,
+            })
+        })?;
+    user_space
+        .writer(address, size_of::<RsmStateWord>())?
+        .write_val(&request)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn rsm_unload(ctx: &Context) -> Result<SyscallReturn> {
+    require_rsm_capability(ctx)?;
+    let program = {
+        let mut loaded = PROGRAM.write();
+        let current = loaded.as_ref().ok_or_else(|| Error::new(Errno::ENOENT))?;
+        // Attach and inspection must acquire a reference under this same lock.
+        // An attachment or a callback already in progress retains its own Arc.
+        if Arc::strong_count(current) != 1 {
+            return_errno_with_message!(Errno::EBUSY, "RSM program is in use");
+        }
+        loaded.take()
+    };
+    drop(program);
+    Ok(SyscallReturn::Return(0))
 }
 
 /// Loads an artifact from a user buffer and stores it as the loaded program.
@@ -94,10 +230,15 @@ fn rsm_load(user_buf_ptr: Vaddr, user_buf_len: usize, ctx: &Context) -> Result<S
 
     let program = RsmProgram::load(&bytes).map_err(|error| {
         warn!("failed to load RSM program: {error:?}");
-        Error::new(Errno::EINVAL)
+        Error::new(match error {
+            RsmError::Ostd(ostd::Error::NoMemory) => Errno::ENOMEM,
+            _ => Errno::EINVAL,
+        })
     })?;
 
-    *PROGRAM.write() = Some(Arc::new(program));
+    let program = Arc::new(program);
+    let previous = PROGRAM.write().replace(program);
+    drop(previous);
     Ok(SyscallReturn::Return(0))
 }
 
@@ -120,7 +261,8 @@ fn rsm_attach(ctx: &Context) -> Result<SyscallReturn> {
 fn rsm_detach(ctx: &Context) -> Result<SyscallReturn> {
     require_rsm_capability(ctx)?;
 
-    *ATTACHED.write() = None;
+    let detached = ATTACHED.write().take();
+    drop(detached);
     // Reclaim the per-attachment invocation count now that the plugin's
     // lifecycle has ended, so the next attachment starts from zero.
     INVOCATIONS.store(0, Ordering::Relaxed);
@@ -147,7 +289,10 @@ pub(crate) fn read_stats() -> RsmStats {
     let attached = ATTACHED.read().as_ref().cloned();
     let counter = match attached {
         Some(program) => program.counter(),
-        None => PROGRAM.read().as_ref().map_or(0, |program| program.counter()),
+        None => PROGRAM
+            .read()
+            .as_ref()
+            .map_or(0, |program| program.counter()),
     };
     RsmStats {
         counter,

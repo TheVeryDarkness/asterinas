@@ -163,10 +163,12 @@ impl ExpandedPath {
             std::path::PathBuf::from(dir).join("src")
         };
 
-        // Strip `$CARGO_MANIFEST_DIR/src/`.
-        let Ok(module_path) = local_path.strip_prefix(&prefix) else {
-            panic!("{prefix:?} must be a prefix of {local_path:?}.")
-        };
+        // Build-time source transformations can preserve the module hierarchy
+        // in a generated tree. Original files still resolve against `src`.
+        let generated_root =
+            std::env::var_os("SHORT_VIS_PATH_GENERATED_ROOT").map(std::path::PathBuf::from);
+        let module_path = relative_source_path(&local_path, &prefix, generated_root.as_deref())
+            .unwrap_or_else(|| panic!("{prefix:?} must be a prefix of {local_path:?}."));
 
         // Strip `/mod.rs` from `parent/child/mod.rs` for child module.
         let module_path = if module_path.file_name() == Some("mod.rs".as_ref()) {
@@ -197,5 +199,40 @@ impl ExpandedPath {
                 .map(|s| PathSegment::from(Ident::new(s, self.callsite_span)))
                 .collect(),
         })
+    }
+}
+
+/// Resolves an original or generated file without accepting sibling prefixes.
+fn relative_source_path<'a>(
+    file: &'a std::path::Path,
+    source: &std::path::Path,
+    generated: Option<&std::path::Path>,
+) -> Option<&'a std::path::Path> {
+    file.strip_prefix(source)
+        .ok()
+        .or_else(|| generated.and_then(|root| file.strip_prefix(root).ok()))
+}
+
+#[cfg(test)]
+mod generated_source_tests {
+    use std::path::Path;
+
+    use super::relative_source_path;
+
+    #[test]
+    fn resolves_only_files_under_declared_source_roots() {
+        let source = Path::new("/crate/src");
+        let generated = Some(Path::new("/build/generated"));
+        for file in ["/crate/src/fs/mod.rs", "/build/generated/fs/mod.rs"] {
+            assert_eq!(
+                relative_source_path(Path::new(file), source, generated),
+                Some(Path::new("fs/mod.rs")),
+            );
+        }
+        assert!(
+            relative_source_path(Path::new("/build/generated-other/fs.rs"), source, generated)
+                .is_none()
+        );
+        assert!(relative_source_path(Path::new("/build/generated/fs.rs"), source, None).is_none());
     }
 }
