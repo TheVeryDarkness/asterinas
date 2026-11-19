@@ -33,6 +33,7 @@
     * [Firecracker](kernel/firecracker.md)
     * [RSM Function Hooks (Research Prototype)](kernel/rsm-function-hooks.md)
     * [RSM 函数 Hook：实现、使用与取舍](kernel/rsm-function-hooks-zh.md)
+    * [RSM 内核观测原型：从一次 bind 到用户态计数](kernel/rsm-stage-report-zh.md)
 * [The Framekernel Architecture](kernel/the-framekernel-architecture.md)
 * [Linux Compatibility](kernel/linux-compatibility/README.md)
     * [Syscall Flag Coverage](kernel/linux-compatibility/syscall-flag-coverage/README.md)
